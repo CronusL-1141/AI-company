@@ -18,6 +18,12 @@ round (``aiteam.single_flight``). The job itself is ``aiteam.assets.ingest``.
 
 Nothing here touches an unenrolled folder, and with no folder enrolled a hook
 event costs one emptiness check.
+
+On an edge of the multi-host sync the backup is paused (``paused``): the asset tables
+are shared, an edge writes the shared face only through operations, and backup
+entries going through operations belong to the backup's cross-machine stage, which
+is not built yet. Paused, hook events queue nothing; enrolling, running and answering
+a scan hit are refused with the reason; the status and the E30 notice say so.
 """
 
 from __future__ import annotations
@@ -97,6 +103,14 @@ class Attention:
 FOLDER_MISSING = "folder_missing"
 STORE_MISSING = "store_missing"
 UNREADABLE_DIR = "unreadable_dir"
+PAUSED_EDGE = "paused_edge"
+# Why the backup does nothing on an edge (multi-host sync), as the user reads it.
+EDGE_PAUSE = ("本机是多机同步的边缘节点，工作流备份已暂停：跨机阶段未上线（中心机与单机照常备份；"
+              "跨机阶段上线后在本机恢复）")
+
+
+class BackupPausedError(RuntimeError):
+    """The backup is paused on this node; the message says why."""
 
 
 @dataclass
@@ -121,8 +135,9 @@ class AssetBackup:
 
     def __init__(self, *, repo: AssetRepository, projects: Callable[[], Awaitable[list[attribution.ProjectRoot]]],
                  data_dir: Path, node_id: str = "", source: Path | None = None,
-                 machine: Callable[[], MachineKey] = read_machine_key) -> None:
+                 machine: Callable[[], MachineKey] = read_machine_key, paused: str = "") -> None:
         self.repo = repo
+        self.paused = paused
         self.data_dir = Path(data_dir)
         self.node_id = node_id
         self._source = source or source_root()
@@ -169,7 +184,7 @@ class AssetBackup:
 
     def note_hook_event(self, payload: dict, folder: Path | None) -> None:
         """Queue whatever a hook event asks of an enrolled folder. Never reads a file."""
-        if not self._folders or payload.get("harness") == "codex":
+        if self.paused or not self._folders or payload.get("harness") == "codex":
             return  # the Codex home has its own stage; Claude Code events only
         event = payload.get("hook_event_name")
         tool = payload.get("tool_name")
@@ -188,7 +203,7 @@ class AssetBackup:
     def note_compact(self, session_id: str, folder: Path | None) -> None:
         """PreCompact reaches the API as a checkpoint, not a hook event."""
         enrolled = self._folder(folder)
-        if enrolled is not None:
+        if enrolled is not None and not self.paused:
             self._request_full(enrolled, AssetVersionSource.RECONCILE, session_id)
 
     def _folder(self, path: Path | str | None) -> _Folder | None:
@@ -241,8 +256,10 @@ class AssetBackup:
                      categories: list[AssetCategory] | None) -> AssetRoot:
         """Enroll or ignore a folder; an enrolled folder is compared right away.
 
-        Raises ``EnrollRefusedError`` when this machine has no key or OS is not installed from source.
+        Raises ``EnrollRefusedError`` when this machine has no key or OS is not installed from source,
+        ``BackupPausedError`` when the backup is paused here.
         """
+        self._refuse_if_paused()
         if not self.machine.key:
             raise EnrollRefusedError(self.machine.refusal)
         if not await asyncio.to_thread(_source_installed, self._source):
@@ -257,6 +274,7 @@ class AssetBackup:
 
     async def run_now(self, root_id: str, *, timeout: float) -> RunSummary | None:
         """Compare a folder now and wait up to ``timeout``; None when it is still running."""
+        self._refuse_if_paused()
         folder = self._folders.get(root_id)
         if folder is None:
             raise KeyError(root_id)
@@ -274,6 +292,7 @@ class AssetBackup:
         Allowing binds to that content of that path (a later edit is scanned again);
         excluding binds to the path (it is never backed up again).
         """
+        self._refuse_if_paused()
         finding = await self.repo.get_finding(finding_id)
         if finding is None:
             return None
@@ -283,6 +302,10 @@ class AssetBackup:
             folder.forced.add((finding.category, finding.rel_path))
             self._request_full(folder, AssetVersionSource.MANUAL, "", throttle=False)
         return finding, changed
+
+    def _refuse_if_paused(self) -> None:
+        if self.paused:
+            raise BackupPausedError(self.paused)
 
     async def known_profile(self, host: AssetHost, path: str) -> str:
         """The profile this machine's folder at ``path`` was enrolled into, or ""."""
@@ -300,8 +323,11 @@ class AssetBackup:
     async def attention(self) -> list[Attention]:
         """What this machine's enrolled folders could not keep or read: stops first, then paths.
 
-        Reads the cached comparison lists, not the table.
+        Reads the cached comparison lists, not the table. Paused, every enrolled folder of
+        this machine is one stop and nothing else is reported.
         """
+        if self.paused:
+            return [Attention(folder.root, "", PAUSED_EDGE) for folder in self._folders.values()]
         stops, items = [], []
         for folder in self._folders.values():
             if folder.stopped:
@@ -335,6 +361,7 @@ class AssetBackup:
             "stored_bytes": stored,
             "warnings": await self._storage_warnings(stored),
             "machine_refusal": self.machine.refusal,
+            "paused": self.paused,
         }
 
     def _root_status(self, root: AssetRoot, rows: list[StateRow], last: datetime | None) -> dict:

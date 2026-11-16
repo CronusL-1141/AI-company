@@ -353,6 +353,14 @@ COLUMNS_TO_ENSURE: list[tuple[str, str, str]] = [
     ("sync_state", "hlc", "VARCHAR(128) NOT NULL DEFAULT ''"),
     ("sync_state", "baseline_seq", "INTEGER NOT NULL DEFAULT 0"),
     ("sync_state", "pruned_seq", "INTEGER NOT NULL DEFAULT 0"),
+    # Multi-host sync, phase 2: the session face going up (SyncPeerModel), and the
+    # number a fact taken in from another node had there (CodexUsageObservationModel).
+    ("sync_peers", "up_cursor", "INTEGER NOT NULL DEFAULT 0"),
+    ("sync_peers", "up_pruned", "INTEGER NOT NULL DEFAULT 0"),
+    ("sync_state", "registered_node", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("sync_state", "registered_role", "VARCHAR(16) NOT NULL DEFAULT ''"),
+    ("sync_state", "hardware_uuid", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("codex_usage_observations", "origin_seq", "INTEGER"),
 ]
 
 

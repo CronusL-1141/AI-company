@@ -228,6 +228,7 @@ class TeamModel(OriginNodeMixin, Base):
 
         return Team(
             id=self.id,
+            origin_node=self.origin_node or "",
             name=self.name,
             mode=OrchestrationMode(self.mode),
             project_id=self.project_id,
@@ -343,6 +344,7 @@ class AgentModel(OriginNodeMixin, Base):
         """Convert to Pydantic model."""
         return Agent(
             id=self.id,
+            origin_node=self.origin_node or "",
             team_id=self.team_id,
             name=self.name,
             role=self.role,
@@ -666,6 +668,7 @@ class EventModel(OriginNodeMixin, Base):
         """Convert to Pydantic model."""
         return Event(
             id=self.id,
+            origin_node=self.origin_node or "",
             type=EventType(self.type),
             source=self.source,
             data=self.data or {},
@@ -800,6 +803,7 @@ class AgentActivityModel(OriginNodeMixin, Base):
         """Convert to Pydantic model."""
         return AgentActivity(
             id=self.id,
+            origin_node=self.origin_node or "",
             agent_id=self.agent_id,
             session_id=self.session_id,
             tool_name=self.tool_name,
@@ -2462,6 +2466,7 @@ class WorkflowRunModel(OriginNodeMixin, Base):
         """Convert to Pydantic model."""
         return WorkflowRun(
             id=self.id,
+            origin_node=self.origin_node or "",
             wf_id=self.wf_id,
             project_id=self.project_id or "",
             team_id=self.team_id,
@@ -2600,6 +2605,7 @@ class WorkflowAgentModel(OriginNodeMixin, Base):
         """Convert to Pydantic model."""
         return WorkflowAgent(
             id=self.id,
+            origin_node=self.origin_node or "",
             run_id=self.run_id,
             wf_id=self.wf_id,
             project_id=self.project_id or "",
@@ -2835,6 +2841,11 @@ class CodexUsageObservationModel(OriginNodeMixin, Base):
     occurred_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     response_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Multi-host sync: ``seq`` numbers facts in this database. A fact taken in from
+    # another node gets this database's next number, and keeps the number it had
+    # there here, meaningful together with origin_node (aiteam.sync.tables
+    # SESSION_RENUMBERED). Empty for facts recorded here.
+    origin_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class CodexUsageSourceCursorModel(Base):
@@ -3102,6 +3113,12 @@ class SyncStateModel(Base):
     hlc: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     baseline_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     pruned_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # The node this database belongs to, recorded each time it starts with an identity
+    # that holds (aiteam.sync.node.registered_node): a database that knows it is a sync
+    # node's does not fall back to standalone when node.json goes missing.
+    registered_node: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    registered_role: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
+    hardware_uuid: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
 
 
 class SyncSuppressModel(Base):
@@ -3115,6 +3132,21 @@ class SyncSuppressModel(Base):
     """
 
     __tablename__ = "sync_suppress"
+
+    holder: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class SyncGuardModel(Base):
+    """While a row exists, writes to session tables are recorded for a check; none is committed.
+
+    The center carrying out another node's operation inserts its row as the first
+    write of that operation's transaction and deletes it before committing, like
+    sync_suppress: the session-table triggers then record what the operation wrote,
+    and the center refuses an operation that wrote a session row it does not own
+    (one writer per origin: aiteam.sync.effects).
+    """
+
+    __tablename__ = "sync_guard"
 
     holder: Mapped[str] = mapped_column(String(64), primary_key=True)
 
@@ -3199,6 +3231,36 @@ class SyncPeerModel(Base):
     handshake_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     last_ok_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=utc_now)
+    # The session face going up: this node's change sequence the center has taken in
+    # (``up_cursor``), and how far this node pruned its session changes after they were
+    # taken in: the center can be sent anything after ``up_pruned`` again.
+    up_cursor: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    up_pruned: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+
+class SyncIntakeModel(Base):
+    """The center's view of one edge's session face going up.
+
+    ``cursor`` is the edge's change sequence taken in; ``snapshot`` the sequence the
+    last applied batch was read at: a batch read earlier would bring older rows and is
+    not applied. ``baseline_owner`` marks the edge whose database was the baseline of
+    the cut-over: rows with an empty origin are its rows. The counts say what the
+    center did not take: rows of another owner (``skipped_foreign``, expected when a
+    row is written on two machines) and rows claiming an origin the batch did not
+    come from (``refused``, never expected).
+    """
+
+    __tablename__ = "sync_intake"
+
+    node: Mapped[str] = mapped_column(String(64), primary_key=True)
+    cursor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshot: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    baseline_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    applied: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_foreign: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    refused: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_batch_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=utc_now)
 
 

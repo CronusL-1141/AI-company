@@ -65,6 +65,7 @@ import { useTeams } from '@/api/teams';
 import { useWorkflowAgents, useWorkflows } from '@/api/workflows';
 import type { WorkflowRun, WorkflowAgentState } from '@/api/workflows';
 import { TeamDisplayName } from '@/components/teams/TeamDisplayName';
+import { NodeBadge } from '@/components/sync/NodeBadge';
 import { fmtDuration, StatusBadge as WorkflowStatusBadge } from '@/pages/WorkflowsPage';
 import { useAgents, useDeleteAgent } from '@/api/agents';
 import { useRunTask } from '@/api/tasks';
@@ -475,10 +476,13 @@ function SessionEvidence({ session }: { session: SummarySession }) {
       : source === 'activity_only' ? t.projectDetail.sessionSourceActivity
         : source === 'codex_rollout' ? t.projectDetail.sessionSourceRollout
           : source === 'identity_only' ? t.projectDetail.sessionSourceIdentity
-            : t.projectDetail.sessionUnknown;
+            : source === 'remote_observation' ? t.sync.lastKnown(
+              session.last_active_at ? formatDateTime(session.last_active_at) : t.projectDetail.sessionUnknown)
+              : t.projectDetail.sessionUnknown;
   return (
     <div className="mt-3 space-y-2 text-xs text-muted-foreground">
-      <div className="flex flex-wrap gap-x-5 gap-y-1">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+        {session.origin_node !== undefined && <NodeBadge origin={session.origin_node} />}
         <span>{t.projectDetail.sessionFirstObserved}: {session.started_at ? formatDateTime(session.started_at) : t.projectDetail.sessionUnknown}</span>
         <span>{t.projectDetail.sessionLastActivity}: {session.last_active_at ? formatDateTime(session.last_active_at) : t.projectDetail.sessionUnknown}</span>
         <span>{t.projectDetail.sessionStateSource}: {sourceLabel}</span>
@@ -1017,6 +1021,7 @@ function ActiveTeamContent({
                 <TeamDisplayName team={team} />
               )}
             </CardTitle>
+            <NodeBadge origin={team.origin_node} />
             {run ? <WorkflowStatusBadge status={run.status} /> : <TeamStatusBadge status={team.status} />}
             <span className="text-sm text-muted-foreground whitespace-nowrap">
               {isSession

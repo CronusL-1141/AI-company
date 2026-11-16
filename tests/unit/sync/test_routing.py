@@ -51,9 +51,14 @@ def test_resolving_a_folder_is_a_read_unless_it_creates_the_project(table) -> No
 
 def test_deletions_and_the_ecosystem_archive_are_online_only(table) -> None:
     for method, path in (("DELETE", "/api/projects/p1"), ("DELETE", "/api/scheduler/s1"),
-                         ("POST", "/api/ecosystem/tags"), ("POST", "/api/account-usage/k/plan-anchor/reset")):
+                         ("POST", "/api/ecosystem/tags"), ("PUT", "/api/account-usage/k/plan-anchor")):
         surface = table.match(method, path).surface
         assert surface.face is SyncFace.SHARED and not surface.offline_ok, (method, path)
+
+
+def test_a_plan_anchor_is_chosen_where_its_samples_are(table) -> None:
+    # The reset reads this node's own samples; only the store goes to the center.
+    assert table.match("POST", "/api/account-usage/k/plan-anchor/reset").surface.face is SyncFace.LOCAL
 
 
 def test_path_parameters_name_the_row_a_merge_rule_edits(table) -> None:

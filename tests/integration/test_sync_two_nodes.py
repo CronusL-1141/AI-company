@@ -1,5 +1,8 @@
 """Multi-host sync, phase 1 acceptance: two real nodes, real faults.
 
+Every test ends with the phase 2 check that the center holds exactly the edge's
+session rows (sync_cluster.Cluster.assert_one_writer_per_origin).
+
 Every test cuts a center and an edge over from one baseline (sync_cluster.Cluster):
 two API processes over two data directories, the edge reaching the center only
 through a loopback tunnel. The faults are real: the tunnel is cut (its port closes,
@@ -36,6 +39,7 @@ def cluster(tmp_path: Path):
     try:
         nodes.cut_over()
         yield nodes
+        nodes.assert_one_writer_per_origin()
     finally:
         nodes.close()
 
@@ -355,6 +359,13 @@ def test_a_peer_that_stops_being_the_center_mid_drain_loses_nothing(cluster: Clu
         status = edge.get("/api/sync/status").json()
     assert not status["healthy"] and status["pending_ops"] > 0
     cluster.center.stop()
+    # Standalone, the center stamped what it wrote with no origin, like the baseline's
+    # rows: its own request-ledger events. Nothing of the edge's, and only these.
+    while_standalone = cluster.center.sql("SELECT id, type FROM events WHERE origin_node = '' AND type != ? "
+                                          "AND timestamp > (SELECT max(timestamp) FROM events WHERE type = ?)",
+                                          "cc.tool_use", "cc.tool_use")
+    assert {kind for _, kind in while_standalone} <= {"api.request_rollup"}
+    cluster.tolerated.update(f"events {event_id}: 只在中心" for event_id, _ in while_standalone)
     identity.with_suffix(".away").rename(identity)
     cluster.center.start()
     cluster.wait_attached(timeout=30)
@@ -474,6 +485,7 @@ def governed(tmp_path: Path):
     try:
         nodes.cut_over(SYNC_TEST_WATCHDOG="0.5")
         yield nodes
+        nodes.assert_one_writer_per_origin()
     finally:
         nodes.close()
 

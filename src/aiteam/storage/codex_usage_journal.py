@@ -13,6 +13,7 @@ from aiteam.clock import to_naive_utc
 from aiteam.storage.connection import get_session
 from aiteam.storage.engine_pool import engine_pool
 from aiteam.storage.models import Base, CodexUsageObservationModel, CodexUsageSourceCursorModel
+from aiteam.storage.partition import own_text
 from aiteam.types import CodexUsageObservation, CodexUsageScanBatch, CodexUsageSourceCursor
 
 _LOOKUP_CHUNK = 400
@@ -129,6 +130,8 @@ class CodexUsageJournalRepository:
     # Bounded, indexed reads for the prediction projection. Each returns raw payload
     # text: decoding thousands of facts belongs off the event loop. Every read is
     # bounded by a recording position, so later writes cannot change its answer.
+    # Each sees only this node's facts (aiteam.storage.partition): on the center the
+    # facts of an edge are kept, never projected again.
 
     async def _rows(self, statement, values: dict) -> list:
         try:
@@ -139,7 +142,7 @@ class CodexUsageJournalRepository:
 
     async def recorded_through(self) -> int:
         """The latest recording position; 0 for an empty journal."""
-        rows = await self._rows(text("SELECT COALESCE(MAX(seq), 0) FROM codex_usage_observations"), {})
+        rows = await self._rows(own_text("SELECT COALESCE(MAX(seq), 0) FROM codex_usage_observations WHERE {own}"), {})
         return int(rows[0][0])
 
     async def consumable(
@@ -152,11 +155,11 @@ class CodexUsageJournalRepository:
         yet due). Either way they occurred after ``binding``; a fact without a
         valid time is consumed once, by its recording position.
         """
-        statement = text(
-            "SELECT seq, source_id, payload FROM codex_usage_observations "
-            "WHERE (seq > :after AND seq <= :through AND (occurred_at IS NULL "
+        statement = own_text(
+            "SELECT seq, source_id, payload FROM codex_usage_observations WHERE {own} AND ("
+            "   (seq > :after AND seq <= :through AND (occurred_at IS NULL "
             "       OR (occurred_at > :binding AND occurred_at <= :until))) "
-            "   OR (seq <= :after AND occurred_at > :since AND occurred_at <= :until AND occurred_at > :binding) "
+            "   OR (seq <= :after AND occurred_at > :since AND occurred_at <= :until AND occurred_at > :binding)) "
             "ORDER BY seq"
         )
         return await self._rows(statement, {
@@ -166,33 +169,33 @@ class CodexUsageJournalRepository:
 
     async def ledger_occurrences(self, response_ids: Iterable[str], *, through: int) -> list[JournalRow]:
         """Every recorded ledger fact of these responses up to ``through``."""
-        statement = text(
+        statement = own_text(
             "SELECT seq, source_id, payload FROM codex_usage_observations "
-            "WHERE kind = 'ledger' AND seq <= :through AND response_id IN :ids ORDER BY seq",
+            "WHERE {own} AND kind = 'ledger' AND seq <= :through AND response_id IN :ids ORDER BY seq",
         ).bindparams(bindparam("ids", expanding=True))
         return await self._chunked(statement, response_ids, through=through)
 
     async def session_facts(self, session_ids: Iterable[str], *, kind: str, through: int) -> list[JournalRow]:
         """Every recorded fact of one kind for these sessions up to ``through``."""
-        statement = text(
+        statement = own_text(
             "SELECT seq, source_id, payload FROM codex_usage_observations "
-            "WHERE session_id IN :ids AND kind = :kind AND seq <= :through ORDER BY seq",
+            "WHERE {own} AND session_id IN :ids AND kind = :kind AND seq <= :through ORDER BY seq",
         ).bindparams(bindparam("ids", expanding=True))
         return await self._chunked(statement, session_ids, through=through, kind=kind)
 
     async def ledger_sessions(self, session_ids: Iterable[str], *, through: int) -> set[str]:
         """The sessions among these with at least one recorded ledger fact."""
-        statement = text(
+        statement = own_text(
             "SELECT DISTINCT session_id FROM codex_usage_observations "
-            "WHERE session_id IN :ids AND kind = 'ledger' AND seq <= :through",
+            "WHERE {own} AND session_id IN :ids AND kind = 'ledger' AND seq <= :through",
         ).bindparams(bindparam("ids", expanding=True))
         return {row[0] for row in await self._chunked(statement, session_ids, through=through)}
 
     async def ledger_sources(self, source_ids: Iterable[str], *, through: int) -> set[str]:
         """The physical sources among these with at least one recorded ledger fact."""
-        statement = text(
+        statement = own_text(
             "SELECT DISTINCT source_id FROM codex_usage_observations "
-            "WHERE source_id IN :ids AND kind = 'ledger' AND seq <= :through",
+            "WHERE {own} AND source_id IN :ids AND kind = 'ledger' AND seq <= :through",
         ).bindparams(bindparam("ids", expanding=True))
         return {row[0] for row in await self._chunked(statement, source_ids, through=through)}
 

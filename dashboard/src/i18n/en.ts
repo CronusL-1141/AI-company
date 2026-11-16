@@ -1302,4 +1302,16 @@ export const en: Translations = {
     usedInSessions: (count: number) => `${count} session${count > 1 ? 's' : ''} used`,
     freeInput: 'Free input',
   },
+  sync: {
+    nodeFilter: 'Machine',
+    everyNode: 'All machines',
+    beforeCutOver: 'Before cut-over',
+    originTitle: (node: string) => `From ${node}`,
+    centerView: 'Full view on the center',
+    centerViewHint: 'This machine keeps its own sessions; every machine\'s sessions are on the center\'s dashboard',
+    lastKnown: (when: string) => `Last known ${when}`,
+    otherNodesPlan: 'Latest plan usage of other machines',
+    otherNodesPlanHint: 'Each machine samples and folds its own plan cycles; shown here is its latest observation',
+    usedPercent: (value: number) => `${value}% used`,
+  },
 };

@@ -1,4 +1,6 @@
 export interface Team {
+  /** The node whose session wrote the row (multi-host sync); empty: not recorded. */
+  origin_node?: string;
   id: string;
   name: string;
   mode: string;
@@ -16,6 +18,8 @@ export interface Team {
 }
 
 export interface Agent {
+  /** The node whose session wrote the row (multi-host sync); empty: not recorded. */
+  origin_node?: string;
   id: string;
   team_id: string;
   name: string;
@@ -185,6 +189,8 @@ export interface CompletedTaskPage {
 }
 
 export interface Event {
+  /** The node whose session wrote the row (multi-host sync); empty: not recorded. */
+  origin_node?: string;
   id: string;
   type: string;
   source: string;
@@ -274,6 +280,8 @@ export interface Phase {
 }
 
 export interface AgentActivity {
+  /** The node whose session wrote the row (multi-host sync); empty: not recorded. */
+  origin_node?: string;
   id: string;
   agent_id: string;
   agent_name?: string;

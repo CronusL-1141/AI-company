@@ -44,3 +44,17 @@ def test_unsynced_tables_carry_no_origin_and_give_a_reason(monkeypatch) -> None:
         "notices: 不同步却没写理由",
         "notices: 不同步的表不该有 origin_node 列",
     ]
+
+
+def test_a_column_numbered_per_database_names_where_the_origin_number_goes() -> None:
+    md = MetaData()
+    journal = Table("codex_usage_observations", md, Column("observation_id", String, primary_key=True),
+                    Column("seq", Integer), Column("origin_node", String))
+    assert _problems_for(journal) == [
+        "codex_usage_observations: SESSION_RENUMBERED 的列 ['origin_seq'] 不在表上"
+        "（按库编号的列上行到中心时另行编号，来源的编号要有处可放）"]
+    assert set(tables.SESSION_RENUMBERED) <= tables.SESSION_TABLES
+
+
+def test_the_bookkeeping_of_phase_two_is_grouped() -> None:
+    assert {"sync_intake", "sync_guard"} <= tables.SYNC_BOOKKEEPING_TABLES

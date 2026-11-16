@@ -924,7 +924,7 @@ fi
 #        可离线的共享面写路由数是第二个棘轮 I31_OFFLINE_WRITES：它们承诺「ID 可重现、重放幂等」，
 #        往默认 offline_ok 的模块里加写路由会悄悄做出这个承诺，数一变就要有人有意改这个数。──
 I31_MAX=0
-I31_OFFLINE_WRITES=35
+I31_OFFLINE_WRITES=34
 if [ -f scripts/check_route_surfaces.py ]; then
   I31_OUT="$(python3 scripts/check_route_surfaces.py --max "$I31_MAX" --offline-writes "$I31_OFFLINE_WRITES" 2>&1)"
   I31_RC=$?

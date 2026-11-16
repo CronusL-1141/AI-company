@@ -4,8 +4,10 @@ A write request to a shared-face route (aiteam.sync.routing)
 is recorded in ``sync_outbox`` first, under a fresh operation id and clock. Then:
 
 * attached, nothing queued before it (operations other requests are forwarding
-  right now are not a queue): forwarded to the center, whose answer is the answer;
-  the request returns once the replica has caught up with it (at most
+  right now are not a queue), and this node's session face up to the operation
+  fitting in one forward: forwarded to the center with that session tail, whose
+  answer is the answer; its session effects (events, agents) are written here; the
+  request returns once the replica has caught up with it (at most
   ``READ_YOUR_WRITE_WAIT_S``), so a read right after sees the write;
 * otherwise (offline, draining a backlog, the forward failed or timed out):
   staged. The route runs here, in one unit of work under the operation's ids,
@@ -34,16 +36,19 @@ from typing import Any
 
 import httpx
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiteam.clock import utc_now
 from aiteam.ids import time_ordered_id
 from aiteam.storage.connection import get_engine, unit_of_work
 from aiteam.sync import context as sync_context
-from aiteam.sync import ledger
-from aiteam.sync.changelog import next_hlc, raise_floor
+from aiteam.sync import effects as session_effects
+from aiteam.sync import ledger, upload
+from aiteam.sync.changelog import latest_seq, next_hlc, raise_floor
 from aiteam.sync.merge import rule_for
 from aiteam.sync.protocol import (
+    FORWARD_TAIL_ROWS,
     FORWARD_TIMEOUT_S,
     ONLINE_ONLY_TIMEOUT_S,
     READ_YOUR_WRITE_WAIT_S,
@@ -54,7 +59,7 @@ from aiteam.sync.protocol import (
 )
 from aiteam.sync.routing import WRITE_METHODS, RouteMatch, RouteTable, call_app, refused, writes
 from aiteam.sync.tables import SHARED_TABLES_SQL
-from aiteam.types import LinkState, ScheduledTask, SyncOperation, SyncOpResult
+from aiteam.types import LinkState, ScheduledTask, SyncOperation, SyncOpResult, SyncSessionBatch
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +77,10 @@ def active_edge() -> EdgeSync | None:
 
 
 class _Unreachable(Exception):  # noqa: N818 - control flow: the forward never got there
+    pass
+
+
+class _Declined(Exception):  # noqa: N818 - control flow: the center said it did not carry it out now
     pass
 
 
@@ -111,6 +120,15 @@ async def _respond(send: Send, status: int, headers: dict[str, str], body: bytes
     await send({"type": "http.response.body", "body": body})
 
 
+def _detail(response: httpx.Response) -> str:
+    """The reason a center gave with an error answer."""
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    return str(detail) if detail else response.text[:300]
+
+
 def _refusal(status: int, message: str) -> tuple[int, dict[str, str], bytes]:
     payload = {"success": False, "error": message, "detail": message}
     return status, {"content-type": "application/json"}, json.dumps(payload, ensure_ascii=False).encode()
@@ -119,8 +137,13 @@ def _refusal(status: int, message: str) -> tuple[int, dict[str, str], bytes]:
 class EdgeSync:
     """The shared-face writes of an edge node and the worker that keeps it in sync."""
 
-    def __init__(self, app: Any, db_url: str, node_id: str, center_url: str, db_path: str) -> None:
+    def __init__(self, app: Any, db_url: str, node_id: str, center_url: str, db_path: str, *,
+                 channel: bool = True) -> None:
         self._app = app
+        # No channel: the node's identity did not hold at startup (aiteam.sync.node,
+        # held). No worker runs; every shared-face write is staged for the replay that
+        # follows once the identity holds again.
+        self.channel = channel
         self._db_url = db_url
         self._db_path = db_path
         self.node_id = node_id
@@ -146,11 +169,14 @@ class EdgeSync:
 
     # -- lifecycle -----------------------------------------------------------
 
-    async def start(self) -> None:
+    async def start(self, stopped_because: str = "") -> None:
         global _active  # noqa: PLW0603 - one edge per process
         await self._ledger(ledger.ensure_peer, write=True)
         _active = self
-        await self._spawn_worker()
+        if self.channel:
+            await self._spawn_worker()
+        else:
+            await self._ledger(ledger.detach, f"同步通道已停：{stopped_because}", write=True)
 
     async def stop(self) -> None:
         global _active  # noqa: PLW0603
@@ -189,6 +215,9 @@ class EdgeSync:
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    async def peer(self) -> ledger.Peer:
+        return await self._ledger(ledger.read_peer)
+
     @property
     def worker_alive(self) -> bool:
         return self._worker is not None and self._worker.returncode is None
@@ -218,12 +247,15 @@ class EdgeSync:
         self._in_flight.add(op.op_id)
         try:
             result, sent = None, False
-            if await self._may_forward(op):
+            carried = await self._forwardable(op)
+            if carried is not None:
                 sent = True
                 try:
-                    result = await self._forward(op, timing("forward_timeout", FORWARD_TIMEOUT_S))
+                    result = await self._forward(carried, timing("forward_timeout", FORWARD_TIMEOUT_S))
                 except _Unreachable:
                     sent = False
+                except _Declined:
+                    pass  # staged, replayed later
             if result is not None:
                 await self._ledger(ledger.settle, op.op_id, result, write=True)
         finally:
@@ -247,32 +279,53 @@ class EdgeSync:
             return _refusal(503, "这项写入只能在连上中心节点时进行（多机同步：删除与生态档案只在中心执行）")
         if (await self._ledger(ledger.backlog, None, frozenset(self._in_flight))).pending:
             return _refusal(503, "本机还有未送达中心的写入在排队，这项只许在线的写不能越过它们，请稍后再试")
-        op = op.model_copy(update={"hlc": await self._ledger(next_hlc, write=True)})
+        op = op.model_copy(update={"hlc": await self._ledger(next_hlc, write=True),
+                                   "session_seq": await self._ledger(latest_seq)})
+        carried = await self._with_session_tail(op)
+        if carried is None:
+            return _refusal(503, "本机的会话数据还在上行到中心，这项只许在线的写请稍后再试")
         try:
-            result = await self._forward(op, timing("online_only_timeout", ONLINE_ONLY_TIMEOUT_S))
+            result = await self._forward(carried, timing("online_only_timeout", ONLINE_ONLY_TIMEOUT_S))
         except _Unreachable:
             return _refusal(503, "中心节点不可达，这项写入只能在线进行")
+        except _Declined as exc:
+            return _refusal(503, f"中心节点这次没有执行这项写入，请稍后再试：{exc}")
         if result is None:
             return _refusal(504, "中心节点未在时限内答复，这项写入的结果未知，请稍后查看")
+        await self._ledger(_apply_effects, result, write=True)
         await self._await_replica(result.ack_seq)
         return result.status_code, result.headers, result.body.encode()
 
-    async def _may_forward(self, op: SyncOperation) -> bool:
-        """Attached, and no earlier operation still queued: order is never overtaken.
+    async def _forwardable(self, op: SyncOperation) -> SyncOperation | None:
+        """The operation to forward, carrying its session tail; None when it is to be staged.
 
-        Operations other requests of this process are forwarding at this moment are
-        concurrent with this one, not ahead of it in a queue.
+        Attached, no earlier operation still queued (order is never overtaken), and the
+        session face it waits for fits in one forward. Operations other requests of
+        this process are forwarding at this moment are concurrent with this one, not
+        ahead of it in a queue.
         """
         peer = await self._ledger(ledger.read_peer)
         queued = await self._ledger(ledger.backlog, op.hlc, frozenset(self._in_flight))
-        return peer.link is LinkState.ATTACHED and not queued.pending
+        if peer.link is not LinkState.ATTACHED or queued.pending:
+            return None
+        return await self._with_session_tail(op, peer)
+
+    async def _with_session_tail(self, op: SyncOperation, peer: ledger.Peer | None = None) -> SyncOperation | None:
+        """``op`` carrying this node's session face up to its ``session_seq`` (nothing when the
+        center has it already); None when that is more than one forward carries."""
+        peer = peer or await self._ledger(ledger.read_peer)
+        if peer.up_cursor >= op.session_seq:
+            return op
+        tail = await self._ledger(_read_tail, self.node_id, peer.up_cursor, op.session_seq)
+        return op.model_copy(update={"session_tail": tail}) if tail.upto >= op.session_seq else None
 
     async def _forward(self, op: SyncOperation, timeout: float) -> SyncOpResult | None:
-        """The center's verdict; None when it did not give one now.
+        """The center's verdict; None when the answer is unknown (no reply in time).
 
-        Raises _Unreachable when the operation certainly did not arrive. An answer
-        other than a verdict means the peer is not (now) a center this edge can sync
-        with: the edge detaches at once and the worker's handshake finds out why.
+        Raises _Unreachable when the operation certainly did not arrive, _Declined when
+        the center answered that it did not carry it out now (503). An answer other
+        than a verdict means the peer is not (now) a center this edge can sync with:
+        the edge detaches at once and the worker's handshake finds out why.
         """
         try:
             response = await self._client.post(
@@ -285,7 +338,7 @@ class EdgeSync:
             logger.warning("Multi-host sync: forward of %s has no answer (%s); staged for replay", op.op_id, exc)
             return None
         if response.status_code == 503:
-            return None  # the center could not carry it out now: staged, replayed later
+            raise _Declined(_detail(response))
         if response.status_code != 200:
             reason = f"中心对转发的应答不是裁决（{response.status_code}）：{response.text[:300]}"
             await self._ledger(ledger.detach, reason, write=True)
@@ -379,6 +432,15 @@ class EdgeSync:
         if response.status_code != 200:
             return []
         return [ScheduledTask.model_validate(item) for item in response.json().get("claimed", [])]
+
+
+def _read_tail(conn: Connection, origin: str, after: int, upto: int) -> SyncSessionBatch:
+    return upload.read_batch(conn, origin, after, upto=upto, max_rows=FORWARD_TAIL_ROWS)
+
+
+def _apply_effects(conn: Connection, result: SyncOpResult) -> None:
+    """The session effects of a write never queued (only allowed online): it was not staged."""
+    session_effects.apply(conn, result.effects, staged=False)
 
 
 def _body(messages: list[dict[str, Any]]) -> bytes:

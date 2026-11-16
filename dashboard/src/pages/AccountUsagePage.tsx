@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PricingPlanCapacityPanel } from '@/components/usage/PricingPlanCapacityPanel';
+import { OtherNodesPlan } from '@/components/sync/OtherNodesPlan';
 import { useT } from '@/i18n';
 import { formatDateTimeSystemLocale } from '@/lib/datetime';
 import {
@@ -168,6 +169,7 @@ export function AccountUsagePage() {
           <MonitorSettingsPanel key={'monitor-' + accountKey} accountKey={accountKey} externalBusy={busy} onBusyChange={setPanelBusy} />
         </div>
       </details>}
+      <OtherNodesPlan />
     </div>
   );
 }

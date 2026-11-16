@@ -7,17 +7,27 @@ Those run one at a time (they are short: one handler, one transaction). Writes o
 ever forwarded online (deletions, the ecosystem archive) may call slow services, so
 they run outside one and record their receipt afterwards, concurrently with the rest;
 only two arrivals of the same operation wait for each other.
+
+An operation runs only once the edge's session face is in up to its
+``session_seq`` (aiteam.sync.intake): the teams and agents it names, its author,
+are then here as the edge saw them. Before that the center answers 503
+(``SessionBehindError``): retried, never dropped. What the operation writes on the
+edge's session face goes back with the verdict (aiteam.sync.effects); the unit of
+work records the session writes it made (``guard``) and refuses, with 503, an
+operation that wrote a session row the center does not own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiteam.clock import from_epoch_ms
@@ -26,13 +36,24 @@ from aiteam.storage.connection import get_engine, get_session, unit_of_work
 from aiteam.storage.models import SyncConflictModel, SyncOpReceiptModel
 from aiteam.storage.repository import StorageRepository
 from aiteam.sync import context as sync_context
+from aiteam.sync import effects as session_effects
 from aiteam.sync import hlc as clock
-from aiteam.sync.changelog import observe_hlc
+from aiteam.sync.changelog import guard, observe_hlc, unguard
+from aiteam.sync.intake import Intake
 from aiteam.sync.merge import SUPERSEDES, MergePlan, merge, merge_supersede, rule_for
-from aiteam.sync.protocol import RESPONSE_HEADERS, SYNC_PROTOCOL
+from aiteam.sync.protocol import RESPONSE_HEADERS, SESSION_BEHIND, SYNC_PROTOCOL
 from aiteam.sync.replica import Replica
 from aiteam.sync.routing import RouteMatch, RouteTable, call_app, refused
-from aiteam.types import OpOutcome, SyncConflictStatus, SyncFieldConflict, SyncOperation, SyncOpResult
+from aiteam.types import (
+    OpOutcome,
+    SyncConflictStatus,
+    SyncEffect,
+    SyncFieldConflict,
+    SyncOperation,
+    SyncOpResult,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class OperationRefusedError(ValueError):
@@ -41,6 +62,20 @@ class OperationRefusedError(ValueError):
 
 class TemporaryFailureError(RuntimeError):
     """The center could not carry the operation out now; the edge retries it (503)."""
+
+    def detail(self) -> Any:
+        return str(self)
+
+
+class SessionBehindError(TemporaryFailureError):
+    """The edge's session face is not in as far as the operation waits for (503, retried)."""
+
+    def __init__(self, have: int, need: int) -> None:
+        super().__init__(f"中心尚未收到本机到序号 {need} 的会话面（现到 {have}）")
+        self.have, self.need = have, need
+
+    def detail(self) -> Any:
+        return {"retry": SESSION_BEHIND, "have": self.have, "need": self.need, "message": str(self)}
 
 
 def decode_body(raw: str) -> Any:
@@ -74,11 +109,12 @@ class _KeyedLocks:
 class Operations:
     """Exactly-once execution of edges' operations, merged by the rules."""
 
-    def __init__(self, app: Any, repo: StorageRepository, node_id: str) -> None:
+    def __init__(self, app: Any, repo: StorageRepository, node_id: str, intake: Intake) -> None:
         self._app = app
         self._repo = repo
         self._db_url = repo.db_url
         self.node_id = node_id
+        self._intake = intake
         self._atomic = asyncio.Lock()
         self._arrivals = _KeyedLocks()
         self._routes: RouteTable | None = None
@@ -95,6 +131,9 @@ class Operations:
             known = await self._receipt(op.op_id)
             if known is not None:
                 return known
+            have = await self._intake.cursor(op.origin_node) or 0
+            if have < op.session_seq:
+                raise SessionBehindError(have, op.session_seq)
             if not match.surface.offline_ok:
                 return await self._apply_online(op, match)
             async with self._atomic:
@@ -123,19 +162,37 @@ class Operations:
         return SyncOpResult.model_validate_json(row[0]).model_copy(update={"replayed": True})
 
     async def _apply_atomically(self, op: SyncOperation, match: RouteMatch) -> SyncOpResult:
+        start = 0
+
         async def observe(session: AsyncSession) -> None:
-            await session.run_sync(lambda s: observe_hlc(s.connection(), op.hlc))
+            nonlocal start
+            start = await session.run_sync(lambda s: _guarded_start(s.connection(), op.hlc))
 
         try:
             async with unit_of_work(observe, self._db_url) as session:
                 plan, target = await self._plan(session, op, match)
                 before = await _clocks(session, target) if target else {}
-                status, headers, body = await self._execute(op, plan)
+                status, headers, body, effects = await self._execute(op, plan)
                 if target and not refused(status, body):
                     await _stamp_clocks(session, op, target, before)
-                return await self._settle(session, op, match, plan, status, headers, body)
+                await self._one_writer_per_origin(session, op, start)
+                return await self._settle(session, op, match, plan, status, headers, body, effects)
         except clock.HlcDriftError as exc:
             raise TemporaryFailureError(str(exc)) from exc
+
+    async def _one_writer_per_origin(self, session: AsyncSession, op: SyncOperation, start: int) -> None:
+        """Refuse (503, rolled back) an operation that wrote a session row the center does
+        not own; otherwise lift the guard before the transaction commits."""
+        await session.flush()
+        problems = await session.run_sync(
+            lambda s: session_effects.guard_problems(s.connection(), start, self.node_id))
+        if problems:
+            logger.error("Multi-host sync: operation %s of %s wrote session rows the center does not own: %s",
+                         op.op_id, op.origin_node, problems)
+            raise TemporaryFailureError(
+                f"单写者：中心执行来自 {op.origin_node} 的操作时写了不属于自己的会话面行，已回滚（"
+                + "；".join(problems[:5]) + "）")
+        await session.run_sync(lambda s: unguard(s.connection()))
 
     async def _apply_online(self, op: SyncOperation, match: RouteMatch) -> SyncOpResult:
         try:
@@ -144,9 +201,9 @@ class Operations:
         except clock.HlcDriftError as exc:
             raise TemporaryFailureError(str(exc)) from exc
         plan = MergePlan(decode_body(op.body))
-        status, headers, body = await self._execute(op, plan)
+        status, headers, body, effects = await self._execute(op, plan)
         async with get_session(self._db_url) as session:
-            return await self._settle(session, op, match, plan, status, headers, body)
+            return await self._settle(session, op, match, plan, status, headers, body, effects)
 
     async def _plan(self, session: AsyncSession, op: SyncOperation,
                     match: RouteMatch) -> tuple[MergePlan, tuple[str, str] | None]:
@@ -162,22 +219,25 @@ class Operations:
         row = await session.run_sync(lambda s: Replica(s.connection()).read(rule.table, pk))
         return merge(rule, op, body, row, await _clocks(session, (rule.table, pk))), (rule.table, pk)
 
-    async def _execute(self, op: SyncOperation, plan: MergePlan) -> tuple[int, dict[str, str], bytes]:
+    async def _execute(self, op: SyncOperation,
+                       plan: MergePlan) -> tuple[int, dict[str, str], bytes, list[SyncEffect]]:
+        """Run the route under the operation; its session-face effects come back with it."""
         if plan.skip:
             message = {"success": True, "data": None, "message": "同步合并：本次修改的字段均以中心较新的值为准",
                        "sync_conflicts": [c.model_dump(mode="json") for c in plan.conflicts]}
-            return 200, {"content-type": "application/json"}, json.dumps(message, ensure_ascii=False).encode()
+            return 200, {"content-type": "application/json"}, json.dumps(message, ensure_ascii=False).encode(), []
         body = json.dumps(plan.body, ensure_ascii=False).encode() if plan.merged else op.body.encode()
         wall = from_epoch_ms(clock.parse(op.hlc).wall_ms)
-        with sync_context.operation(op.op_id, origin=op.origin_node, staged=False, wall=wall):
+        with sync_context.operation(op.op_id, origin=op.origin_node, staged=False, wall=wall) as current:
             status, headers, content = await call_app(
                 self._app, op.method, op.path, query=op.query, headers=op.headers, body=body)
         if status >= 500:
             raise TemporaryFailureError(f"{op.method} {op.path} 在中心返回 {status}：{content[:300]!r}")
-        return status, headers, content
+        return status, headers, content, list(current.effects)
 
     async def _settle(self, session: AsyncSession, op: SyncOperation, match: RouteMatch, plan: MergePlan,
-                      status: int, headers: dict[str, str], body: bytes) -> SyncOpResult:
+                      status: int, headers: dict[str, str], body: bytes,
+                      effects: list[SyncEffect]) -> SyncOpResult:
         conflicts = list(plan.conflicts)
         if not plan.skip and refused(status, body):
             outcome = OpOutcome.REJECTED if op.mode == "forward" else OpOutcome.CONFLICT
@@ -197,6 +257,7 @@ class Operations:
             op_id=op.op_id, outcome=outcome, status_code=status,
             headers={k: v for k, v in headers.items() if k in RESPONSE_HEADERS},
             body=body.decode("utf-8", "replace"), ack_seq=ack_seq, conflicts=conflicts,
+            effects=effects if outcome in (OpOutcome.APPLIED, OpOutcome.MERGED) else [],
         )
         session.add(SyncOpReceiptModel(op_id=op.op_id, node=op.origin_node, hlc=op.hlc,
                                        outcome=outcome.value, result=result.model_dump_json()))
@@ -217,6 +278,14 @@ class Operations:
             return
         for memo in memos:
             await self._repo.add_task_memo(str(task_id), content=memo, author="sync", memo_type="issue")
+
+
+def _guarded_start(conn: Connection, hlc: str) -> int:
+    """First write of an operation's transaction: observe its clock, guard the session face
+    (its writes are recorded for the check), and say where the change log stood."""
+    observe_hlc(conn, hlc)
+    guard(conn)
+    return conn.exec_driver_sql("SELECT coalesce(max(seq), 0) FROM sync_changes").scalar_one()
 
 
 async def _clocks(session: AsyncSession, target: tuple[str, str]) -> dict[str, tuple[str, str]]:

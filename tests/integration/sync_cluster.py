@@ -8,6 +8,10 @@ tunnel can also hold the center's answers back, to make the edge time out.
 
 Processes are started in their own process groups and stopped by those groups
 only (the edge's worker is a child of the edge's API).
+
+``Cluster.assert_one_writer_per_origin`` brings a cluster back to steady state
+(processes up, tunnel open, queue drained, session face up) and checks that the
+center holds exactly the edge's session rows: every two-node test ends with it.
 """
 
 from __future__ import annotations
@@ -27,7 +31,9 @@ from typing import Any
 
 import httpx
 
+from aiteam.sync.cli import session_face_differences
 from aiteam.sync.node import write_node_identity
+from aiteam.sync.tables import SESSION_TABLES_SQL
 from aiteam.types import NodeIdentity, NodeRole
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +69,7 @@ class Node:
         self.port = 0
         self.process: subprocess.Popen | None = None
         self.log = root / "api.log"
+        self.started_with: dict[str, str] = {}
 
     def env(self, **extra: str) -> dict[str, str]:
         env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "HOME": str(self.home),
@@ -80,6 +87,7 @@ class Node:
             node_id=self.node_id, role=role, center_url=center_url, hardware_uuid=self.hardware))
 
     def start(self, **extra: str) -> None:
+        self.started_with = extra
         with self.log.open("ab") as log:
             self.process = subprocess.Popen(
                 [sys.executable, str(LAUNCHER)], env=self.env(**extra), cwd=self.root,
@@ -101,6 +109,31 @@ class Node:
 
     def client(self, timeout: float = 20.0) -> httpx.Client:
         return httpx.Client(base_url=self.url, timeout=timeout, trust_env=False)
+
+    @property
+    def running(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def hook(self, session: str, event: str, cwd: str = "/work/shared", **fields: Any) -> None:
+        """One hook event of a session on this node, as the hook scripts post it."""
+        with self.client() as client:
+            response = client.post("/api/hooks/event", json={
+                "hook_event_name": event, "session_id": session, "cwd": cwd, "transcript_path": "", **fields})
+        assert response.status_code == 200, response.text
+
+    def drive_session(self, session: str, *, subagents: tuple[str, ...] = ("team-member",), tools: int = 1,
+                      cwd: str = "/work/shared") -> str:
+        """A session with tool calls and sub-agents on this node; returns its session team's id."""
+        self.hook(session, "SessionStart", cwd, source="startup")
+        self.hook(session, "UserPromptSubmit", cwd, prompt="work")
+        for n in range(tools):
+            tool = {"tool_name": "Bash", "tool_input": {"command": f"echo {n}"}, "tool_use_id": f"tu-{session}-{n}"}
+            self.hook(session, "PreToolUse", cwd, **tool)
+            self.hook(session, "PostToolUse", cwd, **tool, tool_response={"stdout": f"{n}\n"})
+        for n, agent_type in enumerate(subagents):
+            self.hook(session, "SubagentStart", cwd, agent_id=f"{session}-agent-{n}", agent_type=agent_type)
+        return wait_for(lambda: self.sql("SELECT id FROM teams WHERE name = ?", f"session-{session[:8]}"),
+                        what=f"the session team of {session}")[0][0]
 
     def kill(self) -> None:
         """SIGKILL the API process alone, as a crash would; its worker sees stdin close."""
@@ -172,6 +205,10 @@ class Tunnel:
     def _run(self, coroutine) -> Any:
         return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result(timeout=10)
 
+    @property
+    def is_open(self) -> bool:
+        return self._server is not None
+
     def open(self) -> None:
         async def start() -> int:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -237,8 +274,10 @@ class Cluster:
         self.tunnel: Tunnel | None = None
         self.project_id = ""
         self.team_id = ""  # a session team of the baseline: on both nodes, governed by the edge
+        # Differences a test has accounted for (rows a fault made the center write itself).
+        self.tolerated: set[str] = set()
 
-    def cut_over(self, **edge_env: str) -> None:
+    def cut_over(self, *, center_env: dict[str, str] | None = None, **edge_env: str) -> None:
         """The cut-over: one baseline, both identities, center first, then the edge."""
         self.center.start()  # standalone: builds the database the baseline is taken from
         with self.center.client() as client:
@@ -256,7 +295,7 @@ class Cluster:
         self.center.stop()
         copy_database(self.center.db, self.edge.db)
         self.center.identify(NodeRole.CENTER)
-        self.center.start()
+        self.center.start(**(center_env or {}))
         self.tunnel = Tunnel(self.center.port)
         self.tunnel.open()
         self.edge.identify(NodeRole.EDGE, center_url=self.tunnel.url)
@@ -275,6 +314,57 @@ class Cluster:
 
     def pending(self) -> int:
         return self.edge.sql("SELECT count(*) FROM sync_outbox WHERE state = 'pending'")[0][0]
+
+    def uploaded(self) -> bool:
+        """The edge's session face is in on the center as far as the edge has written it."""
+        up = self.edge.sql("SELECT up_cursor FROM sync_peers WHERE peer = 'center'")
+        top = self.edge.sql(
+            f"SELECT coalesce(max(seq), 0) FROM sync_changes WHERE table_name IN ({SESSION_TABLES_SQL})")[0][0]
+        return bool(up) and up[0][0] >= top
+
+    def wait_uploaded(self, timeout: float = 30.0) -> None:
+        wait_for(self.uploaded, timeout=timeout, what="the edge's session face to be up")
+
+    def converge(self, timeout: float = 60.0) -> None:
+        """Back to steady state: both APIs up, the tunnel open, the queue drained, the session face up."""
+        assert self.tunnel is not None
+        if not self.center.running:
+            self.center.start(**self.center.started_with)
+            self.tunnel.target_port = self.center.port
+        if not self.tunnel.is_open:
+            self.tunnel.open()
+        self.tunnel.delay = 0.0
+        if not self.edge.running:
+            self.edge.start(**self.edge.started_with)
+        self.wait_attached(timeout=timeout)
+        wait_for(lambda: self.pending() == 0, timeout=timeout, what="the queue to drain")
+        self.wait_uploaded(timeout=timeout)
+
+    def session_differences(self) -> list[str]:
+        return session_face_differences(self.edge.db, self.center.db, EDGE_ID)
+
+    def assert_one_writer_per_origin(self) -> None:
+        """The center holds exactly the edge's session rows: nothing written there for the edge.
+
+        Background loops a test turned on (the watchdog) keep writing on the edge: a row
+        written after the upload was checked is the edge running ahead, not a divergence,
+        so the comparison is taken again once that row is up too.
+        """
+        self.converge()
+        differences: list[str] = []
+
+        def agree() -> bool:
+            nonlocal differences
+            if not self.uploaded():
+                return False
+            differences = [line for line in self.session_differences() if line not in self.tolerated]
+            return not differences
+
+        try:
+            wait_for(agree, timeout=10, interval=0.5, what="the session faces to agree")
+        except AssertionError:
+            pass
+        assert differences == [], differences[:20]
 
     def close(self) -> None:
         for node in (self.edge, self.center):

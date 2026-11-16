@@ -217,3 +217,24 @@ async def test_an_existing_database_upgrades_in_place(tmp_path: Path) -> None:
     finally:
         con.close()
     assert _problems(path) == []
+
+
+async def test_a_guarded_transaction_records_session_writes_on_a_node_that_does_not_capture_them(database) -> None:
+    """The center captures only the shared face; while it carries out another node's
+    operation (the guard marker stands), its session writes are recorded for the check."""
+    _, path = database
+    _sql(path, "UPDATE sync_state SET capture = 1, node_id = 'mini-c0de'")
+    team = ("INSERT INTO events (id, type, source, data, timestamp) "
+            "VALUES ('{id}', 'team.created', 'test', '{{}}', '2026-01-01')")
+    engine = create_engine(f"sqlite:///{path}")
+    try:
+        with engine.begin() as conn:
+            changelog.guard(conn)
+            conn.exec_driver_sql(team.format(id="t-guarded"))
+            changelog.unguard(conn)
+            conn.exec_driver_sql(team.format(id="t-after"))
+    finally:
+        engine.dispose()
+    _sql(path, team.format(id="t-plain"))
+    assert [(t, pk, kind) for t, pk, kind, _ in _changes(path)] == [("events", "t-guarded", "I")]
+    assert _sql_rows(path, "SELECT count(*) FROM sync_guard") == [(0,)]

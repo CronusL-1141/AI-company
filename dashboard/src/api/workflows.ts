@@ -27,6 +27,8 @@ export interface WorkflowPhase {
 }
 
 export interface WorkflowRun {
+  /** The node whose session ran it (multi-host sync); empty: not recorded. */
+  origin_node?: string;
   id: string;
   wf_id: string;
   project_id?: string | null;
@@ -69,6 +71,8 @@ export interface WorkflowRun {
 }
 
 export interface WorkflowAgent {
+  /** The node whose session ran it (multi-host sync); empty: not recorded. */
+  origin_node?: string;
   id: string;
   run_id: string;
   wf_id: string;
@@ -99,6 +103,8 @@ export interface WorkflowFilters {
   status?: string;
   project_id?: string;
   limit?: number;
+  /** Only runs of this node (multi-host sync); '' for those from before the cut-over. */
+  origin?: string;
 }
 
 export interface ReconcileResult {
@@ -132,6 +138,7 @@ export function useWorkflows(filters?: WorkflowFilters) {
   if (filters?.status) params.set('status', filters.status);
   if (filters?.project_id) params.set('project_id', filters.project_id);
   if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.origin !== undefined) params.set('origin', filters.origin);
   const qs = params.toString();
   const url = `/api/workflows${qs ? `?${qs}` : ''}`;
 

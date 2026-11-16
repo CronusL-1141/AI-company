@@ -80,8 +80,12 @@ export interface SummarySession extends SummaryLeader {
   /** 有新鲜工作证据；activity_state 独立保留最近观测状态。 */
   live: boolean;
   activity_state: 'busy' | 'idle' | 'offline' | 'unknown';
-  /** 取值与 services/project_sessions.py 一致；未识别的新取值前端显示为未知。 */
-  status_source: 'db_observation' | 'cc_registry' | 'codex_rollout' | 'activity_only' | 'identity_only';
+  /** 取值与 services/project_sessions.py 一致；未识别的新取值前端显示为未知。
+   *  remote_observation：别的机器的会话（多机同步），按它上行来的最后已知状态显示。 */
+  status_source: 'db_observation' | 'cc_registry' | 'codex_rollout' | 'activity_only' | 'identity_only'
+    | 'remote_observation';
+  /** 会话所在的机器（多机同步）；空串表示未记录。 */
+  origin_node?: string;
   /** 首次可靠记录时间，不代表宿主启动时间。 */
   started_at: string | null;
   in_flight_task_ids: string[];

@@ -109,17 +109,20 @@ DEAD_TABLES: dict[str, str] = {
 
 # The bookkeeping of sync itself, never synced: the change log and its switches,
 # an edge's outbox, staged rows and link to its center, the center's receipts,
-# field clocks and conflict list, and the ids of deleted natural-key rows.
+# field clocks and conflict list, where each edge's session upload stands, the
+# marker of an operation carried out for another node, and the ids of deleted
+# natural-key rows.
 SYNC_BOOKKEEPING_TABLES = frozenset({
-    "sync_changes", "sync_state", "sync_suppress", "sync_tombstones",
+    "sync_changes", "sync_state", "sync_suppress", "sync_guard", "sync_tombstones",
     "sync_outbox", "sync_tentative", "sync_peers",
-    "sync_op_receipts", "sync_field_clock", "sync_conflicts",
+    "sync_op_receipts", "sync_field_clock", "sync_conflicts", "sync_intake",
 })
 
 SYNCED_TABLES = SESSION_TABLES | SHARED_TABLES
 
-# The shared tables as an SQL list, for ``table_name IN (...)`` over the change log.
+# Each face's tables as an SQL list, for ``table_name IN (...)`` over the change log.
 SHARED_TABLES_SQL = ", ".join(f"'{name}'" for name in sorted(SHARED_TABLES))
+SESSION_TABLES_SQL = ", ".join(f"'{name}'" for name in sorted(SESSION_TABLES))
 
 ORIGIN_COLUMN = "origin_node"
 
@@ -128,6 +131,13 @@ ORIGIN_COLUMN = "origin_node"
 # five-part natural key.
 SYNC_KEYS: dict[str, tuple[str, ...]] = {
     "knowledge_links": ("from_kind", "from_id", "to_kind", "to_id", "link_type"),
+}
+
+# Session columns numbered per database (a sequence the node's own code allocates
+# and reads positions in): the center numbers an edge's row anew and keeps the
+# edge's number in the second column, which only means something with origin_node.
+SESSION_RENUMBERED: dict[str, tuple[str, str]] = {
+    "codex_usage_observations": ("seq", "origin_seq"),
 }
 
 # Columns that record this node's own use and never travel: an update that sets
@@ -193,6 +203,10 @@ def schema_problems(tables: Mapping[str, Table]) -> list[str]:
                 problems.append(f"{name}: 同步表既无主键也无 SYNC_KEYS，变更无从按行记录（补键，或归入不同步并写理由）")
             elif not set(key) <= columns:
                 problems.append(f"{name}: SYNC_KEYS 里的列 {sorted(set(key) - columns)} 不在表上")
+            renumbered = set(SESSION_RENUMBERED.get(name, ()))
+            if not renumbered <= columns:
+                problems.append(f"{name}: SESSION_RENUMBERED 的列 {sorted(renumbered - columns)} 不在表上"
+                                "（按库编号的列上行到中心时另行编号，来源的编号要有处可放）")
         elif ORIGIN_COLUMN in columns and name not in SYNC_BOOKKEEPING_TABLES:
             problems.append(f"{name}: 不同步的表不该有 {ORIGIN_COLUMN} 列")
     return problems

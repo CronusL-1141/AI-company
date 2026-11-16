@@ -26,7 +26,9 @@ import pytest
 
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync import node as node_module
 from aiteam.sync.node import write_node_identity
+from aiteam.sync.tables import SHARED_TABLES
 from aiteam.types import NodeIdentity, NodeRole
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,12 +57,13 @@ async def main():
         reaper, natural = deps.get_reaper(), ids.natural_ids_enabled()
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            project = (await client.post("/api/projects", json={"name": "p", "root_path": "/work/p"})).json()
+            root = "/work/p-" + str(len(await deps.get_repository().list_projects()))  # one per start
+            project = (await client.post("/api/projects", json={"name": "p", "root_path": root})).json()
             status = (await client.get("/api/sync/status")).json()
-        refused = sync_context.refused_role()
+        trouble = sync_context.identity_trouble()
     print(json.dumps({"origins": reaper._scope.origins, "shared": reaper._scope.shared,
                       "natural_ids": natural, "project_id": project["data"]["id"],
-                      "refused_role": refused, "healthy": status["healthy"], "problems": status["problems"]}))
+                      "trouble": trouble, "healthy": status["healthy"], "problems": status["problems"]}))
 
 
 asyncio.run(main())
@@ -118,7 +121,7 @@ async def test_without_node_json_the_node_is_standalone(node_dir: Path) -> None:
     agent_id = await _seed(db)
     started = _start(node_dir, MACHINE_A)
     assert started["origins"] is None and started["shared"] and not started["natural_ids"]
-    assert started["refused_role"] == "" and started["healthy"]
+    assert started["trouble"] is None and started["healthy"]
     stored = _read(db, agent_id)
     assert stored == {"state": ("", 0), "changes": [], "agent_status": "waiting", "outbox": [], "tentative": []}
 
@@ -135,7 +138,8 @@ async def test_an_identity_written_here_runs_as_its_role(node_dir: Path, role: N
     assert started["origins"] == (["air-3f9c"] if center else ["", "air-3f9c"]) and started["natural_ids"]
     assert started["shared"] is center
     stored = _read(db, agent_id)
-    assert stored["state"] == ("air-3f9c", 1)  # the shared face is captured
+    # Both capture the shared face; the edge also its session face, which goes up to the center.
+    assert stored["state"] == ("air-3f9c", 1 if center else 3)
     # The migration turned 'idle' into 'waiting' unrecorded.
     assert stored["agent_status"] == "waiting"
     assert ("agents", agent_id, "U") not in stored["changes"]
@@ -143,8 +147,9 @@ async def test_an_identity_written_here_runs_as_its_role(node_dir: Path, role: N
         # The HTTP write is a change the edges will pull.
         assert ("projects", started["project_id"], "I") in stored["changes"]
     else:
-        # No center to reach: the write was staged as an operation, its row is tentative.
-        assert stored["changes"] == []
+        # No center to reach: the write was staged as an operation, its row is tentative;
+        # what is left in the change log is the edge's session face waiting to go up.
+        assert [change for change in stored["changes"] if change[0] in SHARED_TABLES] == []
         assert stored["outbox"] == [("pending", 1)]
         assert ("projects", started["project_id"]) in stored["tentative"]
 
@@ -158,8 +163,47 @@ async def test_a_copied_identity_is_refused_on_another_machine(node_dir: Path, r
     started = _start(node_dir, MACHINE_B)
     assert started["origins"] is None and started["shared"] and not started["natural_ids"]
     # Not silent: a pending notice names the refused role, the sync health check is red.
-    assert started["refused_role"] == role.value
+    assert started["trouble"] == ["standalone", role.value]
     assert not started["healthy"] and "节点身份被拒" in started["problems"][0]
     assert _read(db, agent_id) == {"state": ("", 0), "changes": [], "agent_status": "waiting", "outbox": [],
                                    "tentative": []}
     assert "写于另一台机器" in (node_dir / "data" / "debug.log").read_text(encoding="utf-8")
+
+
+
+@pytest.mark.parametrize("role", [NodeRole.EDGE, NodeRole.CENTER])
+async def test_a_sync_nodes_database_without_its_identity_file_keeps_its_node(node_dir: Path, role: NodeRole) -> None:
+    """The first start records the node in the database; without node.json the next start
+    keeps it (held): same origin and capture, governance as the role has it, red."""
+    db = node_dir / "data" / "aiteam.db"
+    agent_id = await _seed(db)
+    identity_file = node_dir / "data" / "node.json"
+    write_node_identity(identity_file, NodeIdentity(node_id="air-3f9c", role=role, hardware_uuid=MACHINE_A))
+    first = _start(node_dir, MACHINE_A)
+    identity_file.unlink()
+    held = _start(node_dir, MACHINE_A)
+    assert held["origins"] == first["origins"] and held["shared"] == first["shared"] and held["natural_ids"]
+    assert held["trouble"] == ["held", role.value]
+    assert not held["healthy"] and any("同步通道已停" in problem for problem in held["problems"])
+    assert _read(db, agent_id)["state"] == ("air-3f9c", 1 if role is NodeRole.CENTER else 3)
+
+
+async def test_a_database_cloned_to_other_hardware_writes_under_a_temporary_origin(node_dir: Path) -> None:
+    db = node_dir / "data" / "aiteam.db"
+    agent_id = await _seed(db)
+    identity_file = node_dir / "data" / "node.json"
+    write_node_identity(identity_file, NodeIdentity(node_id="air-3f9c", role=NodeRole.EDGE, hardware_uuid=MACHINE_A))
+    _start(node_dir, MACHINE_A)
+    identity_file.unlink()
+    clone = _start(node_dir, MACHINE_B)
+    origin = node_module.unbound_origin(MACHINE_B)
+    assert clone["origins"] == [origin] and clone["shared"] and clone["trouble"] == ["unbound", "edge"]
+    assert not clone["healthy"] and any("临时来源" in problem for problem in clone["problems"])
+    assert _read(db, agent_id)["state"] == (origin, 0)
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        assert con.execute("SELECT origin_node FROM projects WHERE id = ?", (clone["project_id"],)).fetchone() == (
+            origin,)
+        assert con.execute("SELECT registered_node FROM sync_state").fetchone() == ("air-3f9c",)
+    finally:
+        con.close()

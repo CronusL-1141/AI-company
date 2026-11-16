@@ -8,12 +8,14 @@ The existing project filter is deliberately not applied to account-wide limits.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 
-from aiteam.api.deps import get_repository
+from aiteam.api.deps import get_edge, get_repository
 from aiteam.api.routes.pricing import _catalog, _validate_json_keys
 from aiteam.clock import parse_utc, utc_now
 from aiteam.services.account_monitor import AccountMonitorRunner
@@ -27,8 +29,16 @@ from aiteam.storage.account_usage import AccountUsageRepository, SummaryUnavaila
 from aiteam.storage.codex_usage_journal import CodexUsageJournalUnavailableError
 from aiteam.storage.connection import default_db_url
 from aiteam.storage.repository import StorageRepository
+from aiteam.sync.edge import EdgeSync
 from aiteam.sync.surface import route_surface
-from aiteam.types import PricingAccount, PricingMonitorSettings, PricingPlanAnchorReset, PricingUsageBatch, RouteSurface
+from aiteam.types import (
+    PricingAccount,
+    PricingMonitorSettings,
+    PricingPlanAnchor,
+    PricingPlanAnchorReset,
+    PricingUsageBatch,
+    RouteSurface,
+)
 
 router = APIRouter(prefix="/api/account-usage", tags=["account-usage"])
 # Sync face of these routes (aiteam.sync.surface): Account usage observed on this machine; the price anchor is a user
@@ -73,6 +83,15 @@ async def list_accounts(
         "accounts": [a.model_dump(mode="json") for a in accounts],
         "current_account_key": current_key if any(a.account_key == current_key for a in accounts) else None,
     }}
+
+
+@router.get("/other-nodes")
+async def other_nodes_latest(repository: AccountUsageRepository = Depends(get_account_repository)) -> dict:
+    """Other nodes' latest quota observation per account and window (multi-host sync, on
+    the center): shown as each node observed it, its cycles folded on that node."""
+    latest = await repository.latest_plan_snapshots_elsewhere()
+    return {"success": True, "data": {"items": [
+        {"origin_node": origin, **snapshot.model_dump(mode="json")} for origin, snapshot in latest]}}
 
 
 @router.post("/capture")
@@ -208,24 +227,56 @@ async def list_account_snapshots(
 
 
 @router.post("/{account_key}/plan-anchor/reset", dependencies=[Depends(_validate_json_keys)])
-# Online only: the anchor comes from this node's own samples through the account store's
-# own connection, which an offline stand-in (one transaction holding the lock) would wait on.
-@route_surface(RouteSurface.shared(offline_ok=False))
+# The anchor is chosen here, from this node's own samples (the price summaries are
+# partitioned by node); on an edge the center stores it (PUT .../plan-anchor below).
+@route_surface(RouteSurface.local())
 async def reset_plan_anchor(
     account_key: AccountKey,
     request: PricingPlanAnchorReset,
     repository: AccountUsageRepository = Depends(get_account_repository),
+    edge: EdgeSync | None = Depends(get_edge),
 ) -> dict:
     """Use the latest saved paired sample without invoking native capture."""
+    with _anchor_errors():
+        if edge is None:
+            anchor = await repository.reset_plan_anchor(account_key, request)
+        else:
+            proposed = await repository.propose_plan_anchor(account_key, request)
+            status, body = await edge.submit(
+                "PUT", f"/api/account-usage/{account_key}/plan-anchor", proposed.model_dump(mode="json"))
+            if status != 200:
+                raise HTTPException(status, detail=body.get("detail") if isinstance(body, dict) else body)
+            anchor = PricingPlanAnchor.model_validate(body["data"])
+    return {"success": True, "data": anchor.model_dump(mode="json")}
+
+
+@router.put("/{account_key}/plan-anchor", dependencies=[Depends(_validate_json_keys)])
+# Online only: the anchor an edge chose for its own sample, stored on the center for
+# every node (the sample must be there already, and the revision is counted there).
+@route_surface(RouteSurface.shared(offline_ok=False))
+async def save_plan_anchor(
+    account_key: AccountKey,
+    anchor: PricingPlanAnchor,
+    repository: AccountUsageRepository = Depends(get_account_repository),
+) -> dict:
+    """Store a manual statistics boundary chosen on the node that saved its sample."""
+    if anchor.account_key != account_key:
+        raise HTTPException(400, detail="锚点的账号与路径不一致")
+    with _anchor_errors():
+        stored = await repository.save_plan_anchor(anchor)
+    return {"success": True, "data": stored.model_dump(mode="json")}
+
+
+@contextmanager
+def _anchor_errors() -> Iterator[None]:
     try:
-        anchor = await repository.reset_plan_anchor(account_key, request)
+        yield
     except LookupError as exc:
         raise HTTPException(404, detail="账号尚未采样；请先采样当前 Codex 账号") from exc
     except SummaryUnavailableError as exc:
         raise HTTPException(503, detail="套餐统计摘要正在重建，请稍后重试") from exc
     except ValueError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    return {"success": True, "data": anchor.model_dump(mode="json")}
 
 
 @router.patch("/{account_key}/label", dependencies=[Depends(_validate_json_keys)])

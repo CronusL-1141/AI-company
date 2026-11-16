@@ -1,3 +1,6 @@
+import { NodeBadge } from '@/components/sync/NodeBadge';
+import { originParam } from '@/lib/nodes';
+import { useNodeFilter } from '@/stores/nodeFilter';
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -196,6 +199,7 @@ function WorkflowCard({ run }: { run: WorkflowRun }) {
           <div className="flex flex-wrap items-center gap-2">
             <Workflow className="h-4 w-4 shrink-0 text-muted-foreground" />
             <span className="font-medium">{run.name || run.wf_id}</span>
+            <NodeBadge origin={run.origin_node} />
             <StatusBadge status={run.status} />
             {run.source && (
               <Badge variant="secondary" className="text-[10px]" title={t.workflows.source}>
@@ -251,12 +255,14 @@ export function WorkflowsPage() {
   const { data: projectsData } = useProjects();
   const projects = projectsData?.data ?? [];
 
+  const node = useNodeFilter((state) => state.node);
   const filters = useMemo(
     () => ({
       status: statusFilter === '__all__' ? undefined : statusFilter,
       project_id: projectFilter === '__all__' ? undefined : projectFilter,
+      ...originParam(node),
     }),
-    [statusFilter, projectFilter],
+    [statusFilter, projectFilter, node],
   );
 
   const { data, isLoading, error } = useWorkflows(filters);

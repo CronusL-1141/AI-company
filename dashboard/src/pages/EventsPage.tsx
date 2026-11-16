@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/table';
 import { EventRow } from '@/components/events/EventRow';
 import { useEvents } from '@/api/events';
+import { EVERY_NODE, originParam } from '@/lib/nodes';
+import { useNodeFilter } from '@/stores/nodeFilter';
 import { useProjects } from '@/api/projects';
 import { useWSStore } from '@/stores/websocket';
 import { useT } from '@/i18n';
@@ -50,11 +52,13 @@ export function EventsPage() {
 
   const { connected, events: wsEvents } = useWSStore();
 
+  const node = useNodeFilter((state) => state.node);
   const { data, isLoading, error } = useEvents({
     type_prefix: typeFilter === '__all__' ? undefined : `${typeFilter}.`,
     source: sourceFilter || undefined,
     limit: Number(limit),
     project_id: projectFilter === '__all__' ? undefined : projectFilter,
+    ...originParam(node),
   });
 
   const apiEvents = useMemo(() => data?.data ?? [], [data?.data]);
@@ -70,8 +74,8 @@ export function EventsPage() {
     const seen = new Set<string>();
     const result: (Event & { _isNew?: boolean })[] = [];
 
-    // WS events first (newer)
-    for (const ws of wsEvents) {
+    // WS events first (newer); they name no machine, so a machine filter shows stored events only
+    for (const ws of node === EVERY_NODE ? wsEvents : []) {
       const ev: Event & { _isNew?: boolean } = {
         id: ws.timestamp + ws.type + ws.source,
         type: ws.type,
@@ -98,7 +102,7 @@ export function EventsPage() {
     }
 
     return result.slice(0, Number(limit));
-  }, [wsEvents, apiEvents, typeFilter, sourceFilter, limit]);
+  }, [wsEvents, apiEvents, typeFilter, sourceFilter, limit, node]);
 
   return (
     <div className="space-y-4">

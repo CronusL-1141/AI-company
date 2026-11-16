@@ -15,7 +15,7 @@ from aiteam.clock import utc_now
 from aiteam.services.account_usage import validate_batch_window
 from aiteam.services.plan_capacity import local_estimate, plan_window_start
 from aiteam.services.plan_pricing import estimate_from_cycle, pricing_sample_total, window_status
-from aiteam.services.plan_summary import PriceWindow, advance_cycle
+from aiteam.services.plan_summary import PriceWindow, Summary, advance_cycle
 from aiteam.services.pricing import _precision, price_verification_signals
 from aiteam.storage import plan_summary_store as summary_store
 from aiteam.storage.connection import get_session
@@ -32,6 +32,7 @@ from aiteam.storage.models import (
     AccountUsageSnapshotModel,
     Base,
 )
+from aiteam.storage.partition import elsewhere, own
 from aiteam.types import (
     PlanCapacityEstimate,
     PlanUsageSnapshot,
@@ -297,46 +298,15 @@ class AccountUsageRepository:
         the price summary rather than by scanning the account's history.
         """
         request = PricingPlanAnchorReset.model_validate(request.model_dump(mode="python"))
-        if await self.get_account(account_key) is None:
-            raise LookupError("account does not exist")
-        await summary_store.ensure_summaries(self._db_url, account_key)
+        await self._require_summarised(account_key)
         async with self._write_session() as session:
-            if await session.get(AccountUsageAccountModel, account_key) is None:
-                raise LookupError("account does not exist")
             now = utc_now()
-            price = await summary_store.fresh_summary(session, "price", account_key)
-            if price is None:
-                raise SummaryUnavailableError("统计摘要正在更新，请稍后重试")
-            key = (request.limit_id, request.window_duration_ms)
-            window = price.windows.get(key)
-            selected = None
-            if window is not None:
-                price_row = await session.get(AccountPlanPriceSnapshotModel, window.last_id)
-                quota_row = await session.get(AccountUsageSnapshotModel, window.last_id)
-                if price_row is not None and quota_row is not None and quota_row.account_key == account_key:
-                    selected = PricingPlanSnapshot.model_validate(price_row.payload)
-                    quota = PricingQuotaSnapshot.model_validate(quota_row.payload)
-                    if any(getattr(selected, field) != getattr(quota, field) for field in (
-                        "account_key", "limit_id", "window_duration_ms", "resets_at", "observed_at", "used_percent",
-                    )):
-                        raise ValueError("最新价格与额度采样不一致，未重置统计锚点")
-            if selected is None:
-                raise ValueError("当前窗口尚无已保存的价格与额度采样")
-            window_start = selected.resets_at - timedelta(milliseconds=selected.window_duration_ms)
-            if not window_start <= selected.observed_at <= now < selected.resets_at:
-                raise ValueError("最新采样不在有效额度窗口内，请等待下一次采样")
-            identity = (account_key, request.limit_id, request.window_duration_ms)
-            row = await session.get(AccountPlanPriceAnchorModel, identity)
-            previous = None if row is None else PricingPlanAnchor.model_validate(row.payload)
+            price, window, selected = await self._latest_paired_sample(session, account_key, request, now)
+            row, previous = await self._anchor_row(
+                session, account_key, request.limit_id, request.window_duration_ms)
             if previous is not None and previous.snapshot_id == selected.snapshot_id:
                 return previous
-            anchor = PricingPlanAnchor(
-                **{field: getattr(selected, field) for field in (
-                    "account_key", "limit_id", "window_duration_ms", "snapshot_id",
-                    "observed_at", "used_percent", "resets_at",
-                )},
-                reset_at=now, revision=1 if previous is None else previous.revision + 1,
-            )
+            anchor = _anchor_at(selected, previous, now)
             if row is None:
                 session.add(AccountPlanPriceAnchorModel(
                     account_key=account_key, limit_id=request.limit_id,
@@ -346,12 +316,105 @@ class AccountUsageRepository:
                 row.payload = anchor.model_dump(mode="json")
             # The anchor is the window's latest observation, so its manual cycle
             # starts right here with nothing counted yet (plan_pricing.fold_window).
+            key = (request.limit_id, request.window_duration_ms)
             await summary_store.clear_cycle_requests(session, account_key, key, "manual")
             window.manual = advance_cycle(None, None, selected).state
             window.anchor = (anchor.snapshot_id, anchor.revision)
             await summary_store.save_summary(session, account_key, price)
             await session.flush()
             return anchor
+
+    async def propose_plan_anchor(
+        self, account_key: str, request: PricingPlanAnchorReset,
+    ) -> PricingPlanAnchor:
+        """The anchor a reset sets, chosen from this node's own samples, without writing it.
+
+        On an edge of the multi-host sync: the samples are this node's (partitioned), the
+        anchor is shared, so the edge chooses and the center stores (``save_plan_anchor``).
+        """
+        request = PricingPlanAnchorReset.model_validate(request.model_dump(mode="python"))
+        await self._require_summarised(account_key)
+        async with get_session(self._db_url) as session:
+            now = utc_now()
+            _, _, selected = await self._latest_paired_sample(session, account_key, request, now)
+            _, previous = await self._anchor_row(
+                session, account_key, request.limit_id, request.window_duration_ms)
+            if previous is not None and previous.snapshot_id == selected.snapshot_id:
+                return previous
+            return _anchor_at(selected, previous, now)
+
+    async def save_plan_anchor(self, anchor: PricingPlanAnchor) -> PricingPlanAnchor:
+        """Store an anchor chosen where its sample is (``propose_plan_anchor``).
+
+        The sample must be here with the same values (the edge's session face reaches
+        the center before its operation runs). The revision is counted here, where
+        every node's resets of the window meet; the same sample again changes nothing.
+        The node whose sample it is folds its manual cycle from it; another node's fold
+        finds no sample of its own under it (aiteam.storage.partition), so its manual
+        cycle for the window ends, as an automatic cycle ending would end it.
+        """
+        anchor = PricingPlanAnchor.model_validate(anchor.model_dump(mode="python"))
+        async with self._write_session() as session:
+            if await session.get(AccountUsageAccountModel, anchor.account_key) is None:
+                raise LookupError("account does not exist")
+            sample = await session.get(AccountPlanPriceSnapshotModel, anchor.snapshot_id)
+            selected = None if sample is None else PricingPlanSnapshot.model_validate(sample.payload)
+            if selected is None or any(getattr(selected, field) != getattr(anchor, field) for field in _ANCHORED):
+                raise ValueError("锚点与已保存的价格采样不一致，未重置统计锚点")
+            row, previous = await self._anchor_row(
+                session, anchor.account_key, anchor.limit_id, anchor.window_duration_ms)
+            if previous is not None and previous.snapshot_id == anchor.snapshot_id:
+                return previous
+            anchor = anchor.model_copy(update={"revision": 1 if previous is None else previous.revision + 1})
+            if row is None:
+                session.add(AccountPlanPriceAnchorModel(
+                    account_key=anchor.account_key, limit_id=anchor.limit_id,
+                    window_duration_ms=anchor.window_duration_ms, payload=anchor.model_dump(mode="json")))
+            else:
+                row.payload = anchor.model_dump(mode="json")
+            await session.flush()
+            return anchor
+
+    async def _require_summarised(self, account_key: str) -> None:
+        if await self.get_account(account_key) is None:
+            raise LookupError("account does not exist")
+        await summary_store.ensure_summaries(self._db_url, account_key)
+
+    @staticmethod
+    async def _latest_paired_sample(
+        session: AsyncSession, account_key: str, request: PricingPlanAnchorReset, now: datetime,
+    ) -> tuple[Summary, PriceWindow, PricingPlanSnapshot]:
+        """The window's latest price sample with its quota twin, in a valid window."""
+        if await session.get(AccountUsageAccountModel, account_key) is None:
+            raise LookupError("account does not exist")
+        price = await summary_store.fresh_summary(session, "price", account_key)
+        if price is None:
+            raise SummaryUnavailableError("统计摘要正在更新，请稍后重试")
+        window = price.windows.get((request.limit_id, request.window_duration_ms))
+        selected = None
+        if window is not None:
+            price_row = await session.get(AccountPlanPriceSnapshotModel, window.last_id)
+            quota_row = await session.get(AccountUsageSnapshotModel, window.last_id)
+            if price_row is not None and quota_row is not None and quota_row.account_key == account_key:
+                selected = PricingPlanSnapshot.model_validate(price_row.payload)
+                quota = PricingQuotaSnapshot.model_validate(quota_row.payload)
+                if any(getattr(selected, field) != getattr(quota, field) for field in (
+                    "account_key", "limit_id", "window_duration_ms", "resets_at", "observed_at", "used_percent",
+                )):
+                    raise ValueError("最新价格与额度采样不一致，未重置统计锚点")
+        if window is None or selected is None:
+            raise ValueError("当前窗口尚无已保存的价格与额度采样")
+        window_start = selected.resets_at - timedelta(milliseconds=selected.window_duration_ms)
+        if not window_start <= selected.observed_at <= now < selected.resets_at:
+            raise ValueError("最新采样不在有效额度窗口内，请等待下一次采样")
+        return price, window, selected
+
+    @staticmethod
+    async def _anchor_row(
+        session: AsyncSession, account_key: str, limit_id: str, window_duration_ms: int,
+    ) -> tuple[AccountPlanPriceAnchorModel | None, PricingPlanAnchor | None]:
+        row = await session.get(AccountPlanPriceAnchorModel, (account_key, limit_id, window_duration_ms))
+        return row, None if row is None else PricingPlanAnchor.model_validate(row.payload)
 
     # ------------------------------------------------------------ bounded reads
     # The monitor round and the account page read only these: each is O(1) in the
@@ -363,14 +426,39 @@ class AccountUsageRepository:
         return await summary_store.ensure_summaries(self._db_url, account_key)
 
     async def latest_plan_snapshot(self, account_key: str) -> PlanUsageSnapshot | None:
-        """The account's latest plan observation in (observed_at, snapshot_id) order."""
+        """This node's latest plan observation of the account in (observed_at, snapshot_id) order.
+
+        Where its sampling continues from: another node's observation carries a journal
+        position of that node's database (aiteam.storage.partition).
+        """
         async with get_session(self._db_url) as session:
             row = await session.scalar(
-                select(AccountPlanSnapshotModel).where(AccountPlanSnapshotModel.account_key == account_key)
+                select(AccountPlanSnapshotModel).where(AccountPlanSnapshotModel.account_key == account_key,
+                                                       own(AccountPlanSnapshotModel.origin_node))
                 .order_by(AccountPlanSnapshotModel.observed_at.desc(), AccountPlanSnapshotModel.id.desc())
                 .limit(1),
             )
             return None if row is None else PlanUsageSnapshot.model_validate(row.payload)
+
+    async def latest_plan_snapshots_elsewhere(self) -> list[tuple[str, PlanUsageSnapshot]]:
+        """Other nodes' latest plan observation per account and window, with their node.
+
+        On the center: what its edges observed, shown as observed (each node folds its
+        own quota cycles, aiteam.storage.partition). Empty where every row is this
+        node's (standalone, an edge).
+        """
+        model = AccountPlanSnapshotModel
+        position = func.row_number().over(
+            partition_by=(model.origin_node, model.account_key, func.json_extract(model.payload, "$.limit_id"),
+                          func.json_extract(model.payload, "$.window_duration_ms")),
+            order_by=(model.observed_at.desc(), model.id.desc())).label("position")
+        latest = select(model.origin_node, model.payload, model.observed_at, position).where(
+            elsewhere(model.origin_node)).subquery()
+        statement = select(latest.c.origin_node, latest.c.payload).where(latest.c.position == 1).order_by(
+            latest.c.origin_node, latest.c.observed_at.desc())
+        async with get_session(self._db_url) as session:
+            rows = (await session.execute(statement)).all()
+        return [(origin, PlanUsageSnapshot.model_validate(payload)) for origin, payload in rows]
 
     async def get_plan_snapshot(self, snapshot_id: str) -> PlanUsageSnapshot | None:
         async with get_session(self._db_url) as session:
@@ -682,3 +770,16 @@ class AccountUsageRepository:
                 .order_by(AccountUsageBatchModel.created_at, AccountUsageBatchModel.batch_id),
             )).all()
             return [PricingUsageBatch.model_validate(row.payload) for row in rows]
+
+
+def _anchor_at(selected: PricingPlanSnapshot, previous: PricingPlanAnchor | None, now: datetime) -> PricingPlanAnchor:
+    """The boundary a reset sets at ``selected``, one revision past ``previous``."""
+    return PricingPlanAnchor(
+        **{field: getattr(selected, field) for field in _ANCHORED},
+        reset_at=now, revision=1 if previous is None else previous.revision + 1,
+    )
+
+
+# What an anchor copies from the sample it is set at.
+_ANCHORED = ("account_key", "limit_id", "window_duration_ms", "snapshot_id", "observed_at", "used_percent",
+             "resets_at")

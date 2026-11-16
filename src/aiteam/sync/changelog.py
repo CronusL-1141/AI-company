@@ -23,6 +23,10 @@ They record only while
   not suppressed at all. Recording too much is harmless, the replay is idempotent;
   recording too little loses data.
 
+A session-face trigger also records while ``sync_guard`` holds a row, whatever the
+capture: the center carrying out another node's operation sets it for that
+operation's transaction, to check that it wrote no session row it does not own.
+
 A trigger must never fail the write it observes: every value it reads is
 coalesced, so a missing ``sync_state`` row means "do not record", not an error.
 
@@ -54,6 +58,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from aiteam.sync import hlc as clock
 from aiteam.sync.hlc import tick_sql
+from aiteam.sync.rows import quote
 from aiteam.sync.tables import (
     CONFIG_FIELDS,
     FIELD_CLOCK_TABLES,
@@ -68,6 +73,7 @@ from aiteam.types import SyncFace
 
 MIGRATION_HOLDER = "migration"
 APPLIER_HOLDER = "applier"
+GUARD_HOLDER = "foreign-operation"
 
 # Which faces a node captures: sync_state.capture is a sum of these bits.
 CAPTURE_BITS = {SyncFace.SHARED: 1, SyncFace.SESSION: 2}
@@ -85,6 +91,7 @@ LAST_HLC_SQL = (
 _NODE = "(SELECT node_id FROM sync_state WHERE id = 1)"
 _CAPTURE = "coalesce((SELECT capture FROM sync_state WHERE id = 1), 0)"
 _NOT_SUPPRESSED = "NOT EXISTS (SELECT 1 FROM sync_suppress)"
+_GUARDED = "EXISTS (SELECT 1 FROM sync_guard)"
 CLOCK_VIEW_SQL = f'CREATE VIEW "{CLOCK_VIEW}" AS {tick_sql(LAST_HLC_SQL, _NODE, _PHYSICAL_MS)}'
 
 
@@ -93,34 +100,34 @@ def _face(table: str) -> SyncFace:
 
 
 def _recording(table: str) -> str:
-    return f"({_CAPTURE} & {CAPTURE_BITS[_face(table)]}) AND {_NOT_SUPPRESSED}"
+    face = _face(table)
+    captured = f"({_CAPTURE} & {CAPTURE_BITS[face]})"
+    if face is SyncFace.SESSION:
+        captured = f"({captured} OR {_GUARDED})"
+    return f"{captured} AND {_NOT_SUPPRESSED}"
 
 
 def trigger_name(kind: str, table: str) -> str:
     return f"sync_{kind}_{table}"
 
 
-def _quote(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
-
-
 def _key_sql(alias: str, columns: tuple[str, ...]) -> str:
     if len(columns) == 1:
-        return f"coalesce(CAST({alias}.{_quote(columns[0])} AS TEXT), '')"
-    return "json_array(" + ", ".join(f"{alias}.{_quote(c)}" for c in columns) + ")"
+        return f"coalesce(CAST({alias}.{quote(columns[0])} AS TEXT), '')"
+    return "json_array(" + ", ".join(f"{alias}.{quote(c)}" for c in columns) + ")"
 
 
 def _record(table: str, key_sql: str, kind: str, condition: str = "") -> str:
     where = f" WHERE {condition}" if condition else ""
     return (
         f"INSERT INTO sync_changes (table_name, pk, kind, hlc) "
-        f"SELECT '{table}', {key_sql}, '{kind}', hlc FROM {_quote(CLOCK_VIEW)}{where};"
+        f"SELECT '{table}', {key_sql}, '{kind}', hlc FROM {quote(CLOCK_VIEW)}{where};"
     )
 
 
 def _table_columns(conn: Connection, table: str) -> list[tuple[str, int]]:
     """(name, primary-key position) per column, in table order."""
-    rows = conn.exec_driver_sql(f"PRAGMA table_info({_quote(table)})").all()
+    rows = conn.exec_driver_sql(f"PRAGMA table_info({quote(table)})").all()
     return [(row[1], row[5]) for row in rows]
 
 
@@ -134,7 +141,7 @@ def trigger_sql(table: str, columns: list[tuple[str, int]]) -> dict[str, str]:
     statements = {}
     for short, kind, event, alias in _KINDS:
         if event == "UPDATE" and local:
-            watched = ", ".join(_quote(name) for name, _ in columns if name not in local)
+            watched = ", ".join(quote(name) for name, _ in columns if name not in local)
             event = f"UPDATE OF {watched}"
         body = _record(table, _key_sql(alias, key_columns), kind)
         if kind == "U":
@@ -143,7 +150,7 @@ def trigger_sql(table: str, columns: list[tuple[str, int]]) -> dict[str, str]:
             body = _record(table, old_key, "D", f"{old_key} IS NOT {new_key}") + " " + body
         name = trigger_name(short, table)
         statements[name] = (
-            f"CREATE TRIGGER {_quote(name)} AFTER {event} ON {_quote(table)} "
+            f"CREATE TRIGGER {quote(name)} AFTER {event} ON {quote(table)} "
             f"WHEN {_recording(table)} BEGIN {body} END"
         )
     if table in FIELD_CLOCK_TABLES:
@@ -161,7 +168,7 @@ def _field_clock_sql(table: str, columns: list[tuple[str, int]], key_columns: tu
     """
     skip = set(key_columns) | {ORIGIN_COLUMN} | LOCAL_COLUMNS.get(table, frozenset())
     key = _key_sql("NEW", key_columns)
-    changed = {name: f"OLD.{_quote(name)} IS NOT NEW.{_quote(name)}" for name, _ in columns if name not in skip}
+    changed = {name: f"OLD.{quote(name)} IS NOT NEW.{quote(name)}" for name, _ in columns if name not in skip}
     present = {name for name, _ in columns}
     for name, path in CONFIG_FIELDS.get(table, {}).items():
         if "config" in present:
@@ -171,22 +178,22 @@ def _field_clock_sql(table: str, columns: list[tuple[str, int]], key_columns: tu
             changed[name] = f"{old} IS NOT {new}"
     body = " ".join(
         f"INSERT INTO sync_field_clock (table_name, pk, field, hlc, node) "
-        f"SELECT '{table}', {key}, '{name}', hlc, coalesce({_NODE}, '') FROM {_quote(CLOCK_VIEW)} "
+        f"SELECT '{table}', {key}, '{name}', hlc, coalesce({_NODE}, '') FROM {quote(CLOCK_VIEW)} "
         f"WHERE {condition} "
         f"ON CONFLICT (table_name, pk, field) DO UPDATE SET hlc = excluded.hlc, node = excluded.node;"
         for name, condition in changed.items()
     )
     name = trigger_name("f", table)
-    return f"CREATE TRIGGER {_quote(name)} AFTER UPDATE ON {_quote(table)} WHEN {_recording(table)} BEGIN {body} END"
+    return f"CREATE TRIGGER {quote(name)} AFTER UPDATE ON {quote(table)} WHEN {_recording(table)} BEGIN {body} END"
 
 
 def _tombstone_sql(table: str, key_columns: tuple[str, ...]) -> str:
     """Remember a deleted id while the node syncs, whoever deletes (the applier too)."""
     name = trigger_name("t", table)
     return (
-        f"CREATE TRIGGER {_quote(name)} AFTER DELETE ON {_quote(table)} WHEN {_CAPTURE} != 0 BEGIN "
+        f"CREATE TRIGGER {quote(name)} AFTER DELETE ON {quote(table)} WHEN {_CAPTURE} != 0 BEGIN "
         f"INSERT OR IGNORE INTO sync_tombstones (table_name, pk, hlc) "
-        f"SELECT '{table}', {_key_sql('OLD', key_columns)}, hlc FROM {_quote(CLOCK_VIEW)}; END"
+        f"SELECT '{table}', {_key_sql('OLD', key_columns)}, hlc FROM {quote(CLOCK_VIEW)}; END"
     )
 
 
@@ -236,16 +243,16 @@ def install_change_triggers(conn: Connection) -> int:
     """
     _ensure_state_row(conn)
     if _installed_view(conn) != CLOCK_VIEW_SQL:
-        conn.exec_driver_sql(f"DROP VIEW IF EXISTS {_quote(CLOCK_VIEW)}")
+        conn.exec_driver_sql(f"DROP VIEW IF EXISTS {quote(CLOCK_VIEW)}")
         conn.exec_driver_sql(CLOCK_VIEW_SQL)
     expected, installed = expected_triggers(conn), _installed_triggers(conn)
     for name in sorted(installed.keys() - expected.keys()):
-        conn.exec_driver_sql(f"DROP TRIGGER {_quote(name)}")
+        conn.exec_driver_sql(f"DROP TRIGGER {quote(name)}")
     created = 0
     for name, statement in expected.items():
         if installed.get(name) == statement:
             continue
-        conn.exec_driver_sql(f"DROP TRIGGER IF EXISTS {_quote(name)}")
+        conn.exec_driver_sql(f"DROP TRIGGER IF EXISTS {quote(name)}")
         conn.exec_driver_sql(statement)
         created += 1
     return created
@@ -275,9 +282,14 @@ def next_hlc(conn: Connection) -> str:
     with another writer's.
     """
     _ensure_state_row(conn)
-    value = conn.exec_driver_sql(f"SELECT hlc FROM {_quote(CLOCK_VIEW)}").scalar_one()
+    value = conn.exec_driver_sql(f"SELECT hlc FROM {quote(CLOCK_VIEW)}").scalar_one()
     conn.exec_driver_sql("UPDATE sync_state SET hlc = ? WHERE id = 1", (value,))
     return value
+
+
+def latest_seq(conn: Connection) -> int:
+    """The last change this node recorded (0 for none): where its change sequence stands."""
+    return conn.exec_driver_sql("SELECT coalesce(max(seq), 0) FROM sync_changes").scalar_one()
 
 
 def raise_floor(conn: Connection) -> None:
@@ -298,6 +310,21 @@ def observe_hlc(conn: Connection, remote: str) -> str:
     value = clock.encode(clock.observe(last, clock.parse(remote), node or "", clock.now_ms()))
     conn.exec_driver_sql("UPDATE sync_state SET hlc = ? WHERE id = 1", (value,))
     return value
+
+
+def guard(conn: Connection, holder: str = GUARD_HOLDER) -> None:
+    """Record this transaction's session writes even where that face is not captured.
+
+    For the center carrying out another node's operation: what the operation wrote on
+    the session face is checked before the transaction commits (aiteam.sync.effects).
+    Open it first thing in the transaction and release it before committing, like
+    ``suppress``; a rollback takes it down.
+    """
+    conn.exec_driver_sql("INSERT OR REPLACE INTO sync_guard (holder) VALUES (?)", (holder,))
+
+
+def unguard(conn: Connection, holder: str = GUARD_HOLDER) -> None:
+    conn.exec_driver_sql("DELETE FROM sync_guard WHERE holder = ?", (holder,))
 
 
 def suppress(conn: Connection, holder: str) -> None:

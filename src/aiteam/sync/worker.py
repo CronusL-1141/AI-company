@@ -7,18 +7,26 @@ API writes a line to its stdin) it works:
 
 1. Probe the center (``GET /api/sync/hello``) and check the handshake: protocol,
    database clock convention, schema, the role and the node pinned on first
-   contact, a change sequence that never goes back, and the change at the cursor
-   still being the one the edge applied. Two failed probes detach, three good ones
-   start draining, draining ends attached once the queue is empty.
-2. While attached or draining: replay the queue in clock order. Only the center's
-   verdict (200 with a SyncOpResult) settles an operation. A temporary failure
-   (5xx, a timeout) leaves it at the head and the rest waits behind it; any other
-   answer means the peer is not a center to sync with now: the edge detaches at
-   once and the operation stays queued.
-3. Whatever the queue does: pull the center's changes into the replica (rebuilding
+   contact, a change sequence that never goes back, the change at the cursor
+   still being the one the edge applied, and the center still holding this edge's
+   session face as far as the edge pruned it. Two failed probes detach, three good
+   ones start draining, draining ends attached once the queue is empty and the
+   session face is (nearly) up.
+2. While attached or draining: replay the queue in clock order. Before each
+   operation, send this node's session face up to the operation's ``session_seq``
+   and no further: the center then sees what the edge saw when it wrote (its
+   teams, its agents), not later rows. Only the center's verdict (200 with a
+   SyncOpResult) settles an operation. A temporary failure (5xx, a timeout) leaves
+   it at the head and the rest waits behind it; any other answer means the peer is
+   not a center to sync with now: the edge detaches at once and the operation
+   stays queued.
+3. Send the rest of the session face, a bounded amount per cycle
+   (aiteam.sync.upload: batches the center takes in only in order).
+4. Whatever the queue does: pull the center's changes into the replica (rebuilding
    it when the center no longer keeps the tombstones the cursor needs, or when an
-   operator asked), and replace staged rows by the center's once the operations
-   that staged them have the center's verdict; tell the center when a drain ends.
+   operator asked), delete this node's session rows of a project the center
+   deleted, and replace staged rows by the center's once the operations that
+   staged them have the center's verdict; tell the center when a drain ends.
 
 An idle worker reads and does not write: nothing is committed unless something
 changed. Stdin closing (the API exited, however it exited) ends the worker. No
@@ -30,7 +38,6 @@ Usage: python -m aiteam.sync.worker --db PATH --node-id ID --center-url URL
 from __future__ import annotations
 
 import argparse
-import enum
 import logging
 import sys
 import threading
@@ -43,13 +50,16 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Connection, Engine
 
 from aiteam.clock import parse_utc, utc_now
-from aiteam.sync import ledger
+from aiteam.storage.cascade import delete_project_session_rows
+from aiteam.storage.partition import edge_origins
+from aiteam.sync import ledger, upload
 from aiteam.sync.changelog import suppressed
 from aiteam.sync.ledger import Peer
 from aiteam.sync.protocol import (
     ATTACH_AFTER_SUCCESSES,
     CHANGES_PAGE,
     DETACH_AFTER_FAILURES,
+    FORWARD_TAIL_ROWS,
     PROBE_INTERVAL_S,
     PROBE_TIMEOUT_S,
     PULL_INTERVAL_S,
@@ -61,7 +71,15 @@ from aiteam.sync.protocol import (
 )
 from aiteam.sync.replica import Replica
 from aiteam.sync.tables import SHARED_TABLES
-from aiteam.types import LinkState, SyncChange, SyncChangesPage, SyncHello, SyncOpResult
+from aiteam.sync.upload import Step, Uploader
+from aiteam.types import (
+    LinkState,
+    SyncChange,
+    SyncChangesPage,
+    SyncHello,
+    SyncOperation,
+    SyncOpResult,
+)
 
 logger = logging.getLogger("aiteam.sync.worker")
 
@@ -69,13 +87,7 @@ REPLAY_TIMEOUT_S = 30.0
 # How often an unchanged, healthy link still refreshes last_ok_at, and settled
 # operations are forgotten: rarely, so an idle edge does not write.
 _REFRESH_OK_S = 60.0
-_FORGET_EVERY_S = 3600.0
-
-
-class Replay(enum.Enum):
-    DONE = "done"          # the queue is empty
-    WAITING = "waiting"    # the head failed for now; the rest waits behind it
-    DETACHED = "detached"  # the peer gave no verdict: not a center to sync with now
+_HOUSEKEEP_EVERY_S = 3600.0
 
 
 class Worker:
@@ -86,22 +98,33 @@ class Worker:
         self.node_id = node_id
         # Set when the API process is gone: a long drain ends between two steps.
         self.stop = stop or threading.Event()
-        self._forgot_at = -_FORGET_EVERY_S
+        self.uploader = Uploader(engine, client, node_id, self.stop)
+        self._housekept_at = -_HOUSEKEEP_EVERY_S
 
     # -- one cycle -----------------------------------------------------------
 
     def cycle(self, *, probe: bool) -> None:
         """One round of work; the link is probed only when ``probe`` (every probe interval)."""
-        link = self.record_probe(*self.probe()) if probe else self.peer().link
+        if probe:
+            hello, problem = self.probe()
+            link = self.record_probe(hello, problem)
+            self.rewind_to(hello, problem)
+        else:
+            link = self.peer().link
         if link is LinkState.DETACHED:
             return
         try:
-            if self.replay() is Replay.DETACHED:
+            replayed = self.replay()
+            if replayed is Step.DETACHED:
+                return
+            # The rest of the session face goes up only behind an empty queue: while the
+            # head waits, the center must not see rows past the head's position.
+            if replayed is Step.DONE and self.uploader.upload() is Step.DETACHED:
                 return
             self.pull()  # never held up by a queue that is stuck
             self.reconcile()
             self.finish_drain(link)
-            self.forget_settled()
+            self.housekeep()
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             self.record_probe(None, f"未连上中心：{exc}")  # as certain as a failed probe
         except httpx.HTTPError as exc:
@@ -119,7 +142,9 @@ class Worker:
 
     def probe(self) -> tuple[SyncHello | None, str]:
         peer = self.peer()
-        params = {"cursor": peer.cursor, "cursor_hlc": peer.cursor_hlc} if peer.cursor > 0 and peer.cursor_hlc else {}
+        params: dict[str, Any] = {"node": self.node_id}
+        if peer.cursor > 0 and peer.cursor_hlc:
+            params.update(cursor=peer.cursor, cursor_hlc=peer.cursor_hlc)
         try:
             response = self.client.get("/api/sync/hello", params=params,
                                        timeout=timing("probe_timeout", PROBE_TIMEOUT_S))
@@ -146,7 +171,8 @@ class Worker:
         if hello.max_seq < peer.cursor or hello.cursor_known is False:
             return (f"中心的变更日志与本机记下的不符（中心序号 {hello.max_seq}，本机游标 {peer.cursor}）："
                     "中心库可能被旧备份恢复，需人工处理（python3 -m aiteam.sync repin --rebuild）")
-        return ""
+        with self.engine.connect() as conn:
+            return upload.position_problem(conn, hello.intake_cursor or 0)
 
     def record_probe(self, hello: SyncHello | None, problem: str) -> LinkState:
         """Apply one probe to the link state; written only when something changed."""
@@ -161,17 +187,29 @@ class Worker:
             ledger.write_peer(conn, updated)
         return updated.link
 
+    def rewind_to(self, hello: SyncHello | None, problem: str) -> None:
+        """A center that stands behind this edge's position (it lost the end of what it
+        took in) is sent the rest again from where it stands, before any operation waits."""
+        if hello is None or problem or hello.intake_cursor is None:
+            return
+        if hello.intake_cursor < self.peer().up_cursor:
+            self._write(upload.rewind, hello.intake_cursor)
+
     # -- the queue -----------------------------------------------------------
 
-    def replay(self) -> Replay:
+    def replay(self) -> Step:
         """Send queued operations in order until the queue is empty or the head cannot go."""
         while not self.stop.is_set():
             with self.engine.connect() as conn:
                 head = conn.exec_driver_sql(
                     "SELECT op_id, envelope FROM sync_outbox WHERE state = 'pending' ORDER BY hlc LIMIT 1").first()
             if head is None:
-                return Replay.DONE
+                return Step.DONE
             op_id, envelope = head
+            waits_for = SyncOperation.model_validate_json(envelope).session_seq
+            sent = self.uploader.upload(upto=waits_for)
+            if sent is not Step.DONE:
+                return sent
             try:
                 response = self.client.post("/api/sync/ops", content=envelope,
                                             headers={"content-type": "application/json"},
@@ -181,19 +219,19 @@ class Worker:
                 raise
             except httpx.HTTPError as exc:
                 self._write(ledger.attempt_failed, op_id, f"重放未完成：{exc}")
-                return Replay.WAITING
+                return Step.WAITING
             if response.status_code >= 500:
                 self._write(ledger.attempt_failed, op_id,
                             f"中心暂时无法执行（{response.status_code}）：{response.text[:300]}")
-                return Replay.WAITING
+                return Step.WAITING
             result = _verdict(response)
             if result is None:
                 reason = f"中心对重放的应答不是裁决（{response.status_code}）：{response.text[:300]}"
                 self._write(ledger.attempt_failed, op_id, reason)
                 self._write(ledger.detach, reason)
-                return Replay.DETACHED
+                return Step.DETACHED
             self._write(ledger.settle, op_id, result)
-        return Replay.WAITING
+        return Step.WAITING
 
     # -- the replica ---------------------------------------------------------
 
@@ -218,16 +256,25 @@ class Worker:
         """Write a page into the replica, unless it brings nothing past the cursor."""
         if page.upto <= self.peer().cursor:
             return
-        with self.engine.begin() as conn, suppressed(conn):
-            cursor = ledger.read_peer(conn).cursor
-            if page.upto <= cursor:
-                return
-            protected = ledger.staged_keys(conn)
-            replica = Replica(conn)
-            for change in page.changes:
-                if change.seq > cursor and (change.table_name, change.pk) not in protected:
-                    replica.write(change.table_name, change.pk, change.row)
-            ledger.advance_cursor(conn, page.upto, page.upto_hlc)
+        with self.engine.begin() as conn:
+            with suppressed(conn):
+                cursor = ledger.read_peer(conn).cursor
+                if page.upto <= cursor:
+                    return
+                protected = ledger.staged_keys(conn)
+                replica = Replica(conn)
+                for change in page.changes:
+                    if change.seq > cursor and (change.table_name, change.pk) not in protected:
+                        replica.write(change.table_name, change.pk, change.row)
+                ledger.advance_cursor(conn, page.upto, page.upto_hlc)
+            self._cascade_deleted_projects(conn, [c.pk for c in page.changes
+                                                  if c.table_name == "projects" and c.row is None])
+
+    def _cascade_deleted_projects(self, conn: Connection, project_ids: list[str]) -> None:
+        """This node's session rows of projects the center deleted go too, as this node's
+        own writes (not suppressed: they reach the center with the session face)."""
+        for project_id in project_ids:
+            delete_project_session_rows(conn, project_id, edge_origins(self.node_id))
 
     def rebuild(self) -> None:
         """Replace the whole shared face with the center's (its tombstones are gone)."""
@@ -254,12 +301,15 @@ class Worker:
                 if not page["more"]:
                     break
                 after = page["after"]
-            with self.engine.begin() as conn, suppressed(conn):
-                protected = ledger.staged_keys(conn)
-                replica = Replica(conn)
-                for pk in local_keys(conn, replica, table) - seen:
-                    if (table, pk) not in protected:
+            with self.engine.begin() as conn:
+                with suppressed(conn):
+                    protected = ledger.staged_keys(conn)
+                    replica = Replica(conn)
+                    gone = [pk for pk in replica.keys(table) - seen if (table, pk) not in protected]
+                    for pk in gone:
                         replica.write(table, pk, None)
+                if table == "projects":
+                    self._cascade_deleted_projects(conn, gone)
         self._write(ledger.advance_cursor, *(snapshot or (0, "")))
 
     def reconcile(self) -> None:
@@ -305,10 +355,15 @@ class Worker:
                                          (table, pk, op_id))
 
     def finish_drain(self, link: LinkState) -> None:
+        """Draining ends once the queue is empty and the session face is up but for at most
+        one forward's tail (a forward with more behind it would be staged)."""
         if link is not LinkState.DRAINING:
             return
         with self.engine.connect() as conn:
             if ledger.backlog(conn).pending:
+                return
+            behind = upload.backlog(conn, ledger.read_peer(conn).up_cursor, FORWARD_TAIL_ROWS + 1)
+            if behind > FORWARD_TAIL_ROWS:
                 return
         self.client.post("/api/sync/drained", json={"node_id": self.node_id}, timeout=REPLAY_TIMEOUT_S)
         with self.engine.begin() as conn:
@@ -316,11 +371,17 @@ class Worker:
                 "UPDATE sync_peers SET link = ?, last_error = '', updated_at = ? WHERE link = ?",
                 (LinkState.ATTACHED.value, utc_now().isoformat(), LinkState.DRAINING.value))
 
-    def forget_settled(self) -> None:
-        """Settled operations are kept a while for diagnosis; looked at once an hour."""
-        if time.monotonic() - self._forgot_at < _FORGET_EVERY_S:
+    def housekeep(self) -> None:
+        """Once an hour: forget settled operations, prune session changes the center has."""
+        if time.monotonic() - self._housekept_at < _HOUSEKEEP_EVERY_S:
             return
-        self._forgot_at = time.monotonic()
+        self._housekept_at = time.monotonic()
+        self.forget_settled()
+        while self._write(upload.prune):
+            pass
+
+    def forget_settled(self) -> None:
+        """Settled operations are kept a while for diagnosis."""
         cutoff = (utc_now() - timedelta(days=SETTLED_OP_RETENTION_DAYS)).isoformat()
         condition = ("state != 'pending' AND updated_at < ? AND op_id NOT IN (SELECT op_id FROM sync_tentative)")
         with self.engine.connect() as conn:
@@ -331,6 +392,7 @@ class Worker:
 
 
 def _verdict(response: httpx.Response) -> SyncOpResult | None:
+    """The center's verdict: 200 and parseable, or nothing that may settle an operation."""
     if response.status_code != 200:
         return None
     try:
@@ -369,11 +431,6 @@ def _worth_writing(current: Peer, updated: Peer) -> bool:
     last = parse_utc(current.last_ok_at)
     return updated.last_ok_at != current.last_ok_at and (
         last is None or (utc_now() - last).total_seconds() >= _REFRESH_OK_S)
-
-
-def local_keys(conn: Connection, replica: Replica, table: str) -> set[str]:
-    columns = ", ".join(f'"{c}"' for c in replica.shape(table).key)
-    return {replica.key_of(table, row) for row in conn.exec_driver_sql(f'SELECT {columns} FROM "{table}"').mappings()}
 
 
 def open_engine(db_path: str) -> Engine:

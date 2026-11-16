@@ -1,3 +1,6 @@
+import { NodeBadge } from '@/components/sync/NodeBadge';
+import { byNode } from '@/lib/nodes';
+import { useNodeFilter } from '@/stores/nodeFilter';
 import { Link } from 'react-router-dom';
 import { isFreshWorking } from '@/lib/agentPresentation';
 import { useQueries } from '@tanstack/react-query';
@@ -206,6 +209,7 @@ function TeamAgentOverview({ agents, teamName }: { agents: Agent[]; teamName: st
                   <div key={agent.id} className="flex items-center gap-1.5 text-sm">
                     <AgentDot status={agent.status} />
                     <span className="font-medium">{readableAgentName(agent, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}</span>
+                    <NodeBadge origin={agent.origin_node} />
                     <span className="text-muted-foreground text-xs">{agentStatusLabel(agent.status, t)}</span>
                   </div>
                 ))}
@@ -219,6 +223,7 @@ function TeamAgentOverview({ agents, teamName }: { agents: Agent[]; teamName: st
             <div key={agent.id} className="flex items-center gap-1.5 text-sm">
               <AgentDot status={agent.status} />
               <span className="font-medium">{readableAgentName(agent, t.agentLive.sessionLeader, t.agentLive.unnamedAgent)}</span>
+              <NodeBadge origin={agent.origin_node} />
               <span className="text-muted-foreground text-xs">{agentStatusLabel(agent.status, t)}</span>
             </div>
           ))}
@@ -278,7 +283,8 @@ export function DashboardPage() {
   const projects = projectsData?.data ?? [];
 
   const { data, isLoading: teamsLoading, error } = useTeams();
-  const teams = data?.data ?? [];
+  const node = useNodeFilter((state) => state.node);
+  const teams = byNode(data?.data ?? [], node);
 
   const wsConnected = useWSStore((s) => s.connected);
 

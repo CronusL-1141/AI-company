@@ -14,8 +14,10 @@ import os
 from aiteam.storage.models import Base
 from aiteam.sync.tables import ORIGIN_COLUMN, SHARED_TABLES, SYNCED_TABLES
 
-# Bumped on any change two nodes must agree on (envelope, feed, merge rules).
-SYNC_PROTOCOL = 1
+# Bumped on any change two nodes must agree on (envelope, feed, merge rules). 2: the
+# session face goes up, operations wait for it (session_seq) and hand back their
+# session-face effects. Both machines run the same version, or they do not sync.
+SYNC_PROTOCOL = 2
 # An edge's row in sync_peers: its one center.
 CENTER_PEER = "center"
 
@@ -46,6 +48,29 @@ CHANGES_PAGE = 500
 ROWS_PAGE = 200
 # An edge keeps settled operations this long for diagnosis, then forgets them.
 SETTLED_OP_RETENTION_DAYS = 7
+
+# The session face going up. A batch holds at most this many rows or bytes (one row
+# larger than that goes alone); a forward carries the session changes it waits for
+# when they fit in a smaller tail, and is staged otherwise.
+SESSION_BATCH_ROWS = 500
+SESSION_BATCH_BYTES = 256 * 1024
+FORWARD_TAIL_ROWS = 200
+# A worker cycle uploads at most this much, so pulling the center's changes waits
+# for no backlog.
+UPLOAD_CYCLE_BATCHES = 20
+UPLOAD_CYCLE_S = 2.0
+# The center holds its write lock for taking in batches at most this share of the
+# time: after each batch it waits (1 - duty) / duty times as long as the batch took,
+# so its own hook writes are never held up for long by an edge catching up. Measured
+# with tests/integration/smoke_sync_session_backfill.py (48 hook writers on the center,
+# 60,000 rows coming up): 0.15 keeps their p95 within 1.12 times that without a backfill.
+INTAKE_DUTY = 0.15
+# Session changes the center has taken in stay this long on the edge, so a center
+# restored from a backup can be sent them again.
+SESSION_CHANGES_KEEP_HOURS = 24
+# The reason the center gives when an operation arrives before the session face it
+# waits for (503: retried, never dropped).
+SESSION_BEHIND = "session_behind"
 
 # Request headers never carried in an operation: they describe one HTTP hop.
 _HOP_HEADERS = frozenset({

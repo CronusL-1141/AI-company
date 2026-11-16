@@ -925,37 +925,88 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
                 "notices to move it back or restore it; the backup resumes once it is back. "
                 + _ASSET_TOOLS_FALLBACK[1],
             ),
+            # Multi-host sync: on an edge the backup waits for its cross-machine stage.
+            "paused_edge": _t(
+                "工作流备份已暂停（本机是同步边缘，跨机阶段未上线）：{file}。对 {assistant} 说「查看工作流备份」",
+                "Workflow backup paused (sync edge; cross-machine stage pending): {file}. "
+                'Tell {assistant} "show workflow backup"',
+                "这是预期状态，不是故障：本机是多机同步的边缘节点，工作流备份要等跨机阶段上线才在本机运行；"
+                "已登记的配置目录暂不备份，中心机与单机照常备份。调用 asset_backup_status 看 paused 字段，"
+                "把原因转告用户。不要尝试登记、立即比对或放行，这三项在本机都会被拒绝。" + _ASSET_TOOLS_FALLBACK[0],
+                "This is expected, not a fault: this machine is an edge of the multi-host sync, and the workflow "
+                "backup runs here only once its cross-machine stage is available; enrolled folders are not backed "
+                "up meanwhile, the center and standalone machines back up as usual. Call asset_backup_status, read "
+                "the paused field and tell the user why. Do not try to enroll, run or resolve a finding here: all "
+                "three are refused on this machine. " + _ASSET_TOOLS_FALLBACK[1],
+            ),
         },
     ),
-    # E31: multi-host sync (aiteam.sync.node): node.json declares an edge or center role
-    # this machine refused (written on another machine, or the hardware id is
-    # unreadable). The node runs standalone, so its writes stop reaching the center:
-    # never silent (it is shown at every session start and prompt until fixed).
+    # E31: multi-host sync (aiteam.sync.node.decide): the node identity did not hold at
+    # startup (node.json missing, unreadable, from another machine, or the hardware id
+    # unreadable). A sync node's database keeps its node's id with the channel stopped
+    # (held), one registered to other hardware writes under a temporary origin
+    # (unbound), any other runs standalone. Never silent: shown at every session start
+    # and prompt until fixed.
     CatalogEntry(
         id="sync_identity_refused",
         kind=NoticeKind.ACTION, severity=NoticeSeverity.ACTION,
         hosts=frozenset({"cc", "codex"}), render_at=frozenset({"session_start", "prompt"}),
         dedup="per_session", clear="auto", params={"role": 12},
-        variants={"": _t(
-            "多机同步：本机身份（{role}）未通过核对，已按单机运行，写入不再同步到中心。"
-            "对 {assistant} 说「查看同步状态」",
-            'Multi-host sync: node identity ({role}) refused, OS runs standalone and stops syncing. '
-            'Tell {assistant} "show sync status"',
-            "本机 node.json 声明的角色 {role} 没有通过硬件核对，OS 已按单机运行：此后的共享面写入只留在本机，"
-            "不会到达中心。原因在 GET /api/sync/status 的 refusal 字段，请原样告诉用户。读不到硬件标识通常重启 OS "
-            "服务即可；文件来自另一台机器时由用户决定：本机不该同步就删掉 node.json；本机该同步就运行 "
-            "python3 -m aiteam.sync enable 为本机另起身份（先预演，用户确认后加 --apply），若本机是中心，"
-            "边缘还要运行 python3 -m aiteam.sync repin。不要自行改写 node.json。",
-            "This machine's node.json declares the role {role} but failed the hardware check, so OS runs "
-            "standalone: shared writes from now on stay here and never reach the center. The reason is in the "
-            "refusal field of GET /api/sync/status; tell the user as it is. An unreadable hardware id usually "
-            "clears on an OS service restart; a file from another machine is the user's call: if this machine "
-            "should not sync, delete node.json; if it should, python3 -m aiteam.sync enable makes it an identity "
-            "of its own (preview first, add --apply once the user agrees), and when it is the center the edges "
-            "then run python3 -m aiteam.sync repin. Do not rewrite node.json yourself.",
-        )},
+        variants={
+            "": _t(  # held: the database is this machine's sync node
+                "多机同步已暂停：本机身份（{role}）未核对通过，继续按登记身份记录、不同步。"
+                "对 {assistant} 说「查看同步状态」",
+                'Multi-host sync paused: node identity ({role}) not verified; recording as before, not syncing. '
+                'Tell {assistant} "show sync status"',
+                "本机数据库登记为多机同步的 {role} 节点，但启动时 node.json 缺失、损坏、来自另一台机器，或读不到"
+                "硬件标识。OS 继续以登记的节点身份记录本机的行（不会写成别的机器的，也不会去管别的机器的行），"
+                "同步通道已停：共享面写入在本机排队，身份恢复后补发。原因在 GET /api/sync/status 的 refusal 字段，"
+                "请原样告诉用户。读不到硬件标识通常重启 OS 服务即可；node.json 丢了或坏了，从备份放回本机原来的"
+                "那份再重启；不要自行改写 node.json。",
+                "This machine's database is registered as a {role} node of the multi-host sync, but at startup "
+                "node.json was missing, damaged, from another machine, or the hardware id could not be read. OS keeps "
+                "recording this machine's rows under its registered node (never as another machine's, never governing "
+                "another machine's rows); the sync channel is stopped and shared writes queue here until the identity "
+                "holds again. The reason is in the refusal field of GET /api/sync/status; tell the user as it is. An "
+                "unreadable hardware id usually clears on an OS service restart; a missing or damaged node.json is "
+                "restored from this machine's own backup, then OS restarts. Do not rewrite node.json yourself.",
+            ),
+            "unbound": _t(
+                "多机同步：本机数据库属于另一台机器的 {role} 节点，本机改用临时身份记录、不同步。"
+                "对 {assistant} 说「查看同步状态」",
+                'Multi-host sync: the database is another machine\'s {role} node; temporary origin, not syncing. '
+                'Tell {assistant} "show sync status"',
+                "本机的数据库登记在另一台机器上（克隆的磁盘或拷贝的数据库）。为免同一来源有两个写者，OS 以由本机"
+                "硬件派生的临时来源记录本机的行，不捕获、不同步。由用户决定：本机要成为同步节点，运行 python3 -m "
+                "aiteam.sync enable 为本机另起身份（先预演，用户确认后加 --apply）；本机不该同步，运行 python3 -m "
+                "aiteam.sync leave 让数据库退出同步。原因在 GET /api/sync/status 的 refusal 字段。",
+                "This machine's database is registered on another machine (a cloned disk or a copied database). To "
+                "keep one writer per origin, OS records this machine's rows under a temporary origin derived from its "
+                "hardware, capturing and syncing nothing. The user decides: for this machine to be a sync node, "
+                "python3 -m aiteam.sync enable gives it an identity of its own (preview first, add --apply once the "
+                "user agrees); if it should not sync, python3 -m aiteam.sync leave takes the database out of the "
+                "sync. The reason is in the refusal field of GET /api/sync/status.",
+            ),
+            "standalone": _t(
+                "多机同步：本机身份（{role}）未通过核对，已按单机运行，写入不会到达中心。"
+                "对 {assistant} 说「查看同步状态」",
+                'Multi-host sync: node identity ({role}) refused, OS runs standalone and stops syncing. '
+                'Tell {assistant} "show sync status"',
+                "本机 node.json 声明的角色 {role} 没有通过硬件核对，而本机数据库从未加入同步，OS 已按单机运行。"
+                "原因在 GET /api/sync/status 的 refusal 字段，请原样告诉用户。读不到硬件标识通常重启 OS 服务即可；"
+                "文件来自另一台机器时由用户决定：本机不该同步就删掉 node.json；本机该同步就运行 python3 -m "
+                "aiteam.sync enable 为本机另起身份（先预演，用户确认后加 --apply）。不要自行改写 node.json。",
+                "This machine's node.json declares the role {role} but failed the hardware check, and its database "
+                "never joined the sync, so OS runs standalone. The reason is in the refusal field of GET "
+                "/api/sync/status; tell the user as it is. An unreadable hardware id usually clears on an OS service "
+                "restart; a file from another machine is the user's call: if this machine should not sync, delete "
+                "node.json; if it should, python3 -m aiteam.sync enable makes it an identity of its own (preview "
+                "first, add --apply once the user agrees). Do not rewrite node.json yourself.",
+            ),
+        },
     ),
 )
+
 
 CATALOG: Mapping[str, CatalogEntry] = {entry.id: entry for entry in CATALOG_ENTRIES}
 

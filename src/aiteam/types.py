@@ -836,6 +836,8 @@ class Team(BaseModel):
     """Team data model."""
 
     id: str = Field(default_factory=_new_id)
+    # The node whose session wrote the row (multi-host sync); empty: not recorded.
+    origin_node: str = ""
     name: str
     mode: OrchestrationMode = OrchestrationMode.COORDINATE
     project_id: str | None = None
@@ -856,6 +858,8 @@ class Agent(BaseModel):
     """Agent data model."""
 
     id: str = Field(default_factory=_new_id)
+    # The node whose session wrote the row (multi-host sync); empty: not recorded.
+    origin_node: str = ""
     team_id: str
     name: str
     role: str
@@ -1120,6 +1124,8 @@ class Event(BaseModel):
     """System event data model."""
 
     id: str = Field(default_factory=_new_id)
+    # The node whose session wrote the row (multi-host sync); empty: not recorded.
+    origin_node: str = ""
     type: EventType
     source: str
     data: dict[str, Any] = Field(default_factory=dict)
@@ -1161,6 +1167,8 @@ class AgentActivity(BaseModel):
     """Agent activity record — logs each agent tool call."""
 
     id: str = Field(default_factory=_new_id)
+    # The node whose session wrote the row (multi-host sync); empty: not recorded.
+    origin_node: str = ""
     agent_id: str
     session_id: str
     tool_name: str  # Tool name (Bash, Edit, Read, Agent, etc.)
@@ -1404,6 +1412,8 @@ class WorkflowRun(BaseModel):
     """
 
     id: str = Field(default_factory=_new_id)
+    # The node whose session wrote the row (multi-host sync); empty: not recorded.
+    origin_node: str = ""
     wf_id: str  # wf_<id>，幂等主锚
     project_id: str = ""  # 绑 launching Leader 项目，走 _apply_project_filter
     team_id: str | None = None  # 既有 workflow-<wf_id> 团队；OS 离线期无团队时留 None
@@ -1482,6 +1492,8 @@ class WorkflowAgent(BaseModel):
     """
 
     id: str = Field(default_factory=_new_id)
+    # The node whose session wrote the row (multi-host sync); empty: not recorded.
+    origin_node: str = ""
     run_id: str  # = workflow_runs.wf_id
     wf_id: str  # 冗余便于直查
     project_id: str = ""  # 隔离
@@ -3452,21 +3464,59 @@ class NodeIdentity(BaseModel):
     created_at: AwareDatetime = Field(default_factory=utc_now)
 
 
-class NodeStatus(BaseModel):
-    """The identity this process runs under, after checking ``node.json`` against the machine.
+class NodeRegistration(NamedTuple):
+    """What a database records about the node it belongs to (``sync_state``).
 
-    ``role`` is the effective role. A declared edge or center role that does not hold
-    on this machine is refused: the node runs standalone and ``refusal`` says why.
+    Written whenever the node starts with an identity that holds on its machine, so a
+    database knows it is a sync node's even when ``node.json`` goes missing.
+    """
+
+    node_id: str
+    role: NodeRole
+    hardware_uuid: str
+
+
+class NodeMode(enum.StrEnum):
+    """How this process takes part in the sync, after checking node.json and the database.
+
+    standalone: not a sync node. syncing: the identity holds; the sync channel runs.
+    held: the identity file is missing, unreadable or unverifiable, and the database is
+    this machine's sync node (or its hardware cannot be read): rows keep the node's
+    id, capture and governance stay as the role has them, the channel is stopped and
+    the status is red. unbound: the database belongs to a node on other hardware (a
+    cloned disk or database): rows get a temporary origin of this machine, nothing is
+    captured or synced, and the status is red.
+    """
+
+    STANDALONE = "standalone"
+    SYNCING = "syncing"
+    HELD = "held"
+    UNBOUND = "unbound"
+
+
+class NodeStatus(BaseModel):
+    """The identity this process runs under, after checking ``node.json`` and the database.
+
+    ``role`` is the effective role: what capture and governance follow. ``origin`` is
+    the node id rows are stamped with. ``refusal`` says why the node is not syncing as
+    declared (empty when it is, or when it is plainly standalone).
     """
 
     identity: NodeIdentity | None = None
     role: NodeRole = NodeRole.STANDALONE
+    mode: NodeMode = NodeMode.STANDALONE
+    origin: str = ""
     refusal: str = ""
 
     @property
     def node_id(self) -> str:
-        """The id this process runs under; a refused identity is not this node's."""
-        return self.identity.node_id if self.identity is not None and not self.refusal else ""
+        """The id this process stamps rows with (empty on a plainly standalone node)."""
+        return self.origin
+
+    @property
+    def channel(self) -> bool:
+        """Whether the sync channel runs: the identity holds on this machine."""
+        return self.mode is NodeMode.SYNCING
 
 
 class GovernanceScope(NamedTuple):
@@ -3695,6 +3745,13 @@ class SyncOperation(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     base: dict[str, Any] = Field(default_factory=dict)
     sync_protocol: int = 0
+    # The edge's change sequence when it recorded the operation: the center carries it
+    # out only once it has taken in the edge's session face up to here, so every
+    # session row the write may refer to (its team, its author) is there first.
+    session_seq: int = Field(default=0, ge=0)
+    # That session face, sent with a forward so it needs no second round trip; never
+    # recorded in the outbox (a replay sends the session face ahead on its own).
+    session_tail: SyncSessionBatch | None = None
 
 
 class SyncFieldConflict(BaseModel):
@@ -3730,6 +3787,9 @@ class SyncOpResult(BaseModel):
     ack_seq: int = 0
     replayed: bool = False
     conflicts: list[SyncFieldConflict] = Field(default_factory=list)
+    # What the write did to the edge's own session face (its events, its agents),
+    # for the edge to write: the center writes no session row of another node.
+    effects: list[SyncEffect] = Field(default_factory=list)
 
 
 class SyncHello(BaseModel):
@@ -3752,6 +3812,9 @@ class SyncHello(BaseModel):
     baseline_seq: int = 0
     max_seq: int = 0
     cursor_known: bool | None = None
+    # Where the asking edge's session face stands on the center (its change sequence
+    # taken in), when the edge named itself; None before the edge's first batch.
+    intake_cursor: int | None = None
 
 
 class SyncChange(BaseModel):
@@ -3765,6 +3828,84 @@ class SyncChange(BaseModel):
     table_name: str
     pk: str
     row: dict[str, Any] | None = None
+
+
+class SyncSessionBatch(BaseModel):
+    """A slice of one edge's session face going up to the center.
+
+    The rows changed in the edge's change sequence after ``after`` through ``upto``,
+    each once under its latest change, read as they stand at ``snapshot`` (the
+    sequence the read saw last; beyond ``upto`` when the slice was cut short). The
+    center takes a batch only when it continues where the edge stands there
+    (``after`` not past its cursor) and was read no earlier than the last one it took.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    origin_node: str = Field(pattern=NODE_ID_PATTERN)
+    after: int = Field(ge=0)
+    upto: int = Field(ge=0)
+    snapshot: int = Field(ge=0)
+    changes: list[SyncChange] = Field(default_factory=list)
+
+
+class SyncIntakeOutcome(enum.StrEnum):
+    """What the center did with a session batch.
+
+    applied: taken in. gap: it starts past where the edge stands on the center (the
+    center lost some of it), so the edge sends again from the returned cursor. stale:
+    it was read before the last batch the center took and would bring older rows.
+    """
+
+    APPLIED = "applied"
+    GAP = "gap"
+    STALE = "stale"
+
+
+class SyncSessionAck(BaseModel):
+    """The center's answer to a session batch: where the edge now stands, and what was not taken.
+
+    ``skipped_foreign``: rows another node owns (written on two machines; the owner's
+    version stays). ``refused``: rows claiming an origin the batch did not come from.
+    """
+
+    cursor: int
+    outcome: SyncIntakeOutcome
+    applied: int = 0
+    skipped_foreign: int = 0
+    refused: int = 0
+
+
+class SyncSessionKeys(BaseModel):
+    """One page of the keys of an edge's session rows the center holds, in one table.
+
+    For ``resend-session``: what the center holds and the edge does not was deleted on
+    the edge in a stretch the center lost, and goes. ``after``: ask again from here.
+    """
+
+    keys: list[str]
+    after: int
+    done: bool
+
+
+class SyncEffectKind(enum.StrEnum):
+    """A session-face write the center hands back to the node that owns the row.
+
+    event: a new event of the operation, the whole row. row_update: fields of an
+    existing session row of that node (an agent's current task).
+    """
+
+    EVENT = "event"
+    ROW_UPDATE = "row_update"
+
+
+class SyncEffect(BaseModel):
+    """One session-face write of an operation, for the operation's node to make itself."""
+
+    kind: SyncEffectKind
+    table_name: str
+    pk: str
+    row: dict[str, Any] | None = None
+    fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class SyncChangesPage(BaseModel):
@@ -3836,7 +3977,38 @@ class SyncStatus(BaseModel):
     last_error: str = ""
     tentative_rows: int = 0
     orphan_writes: int = 0
+    upload_cursor: int = 0
+    upload_backlog: int = 0
+    upload_oldest_at: AwareDatetime | None = None
+    # The rows this node derives data from and governs (None: every row; aiteam.storage.partition).
+    own_origins: list[str] | None = None
     pending_conflicts: int = 0
     wakes_awaiting_claim: int = 0
+    intakes: list[SyncIntakeStatus] = Field(default_factory=list)
     healthy: bool = True
     problems: list[str] = Field(default_factory=list)
+
+
+class SyncIntakeStatus(BaseModel):
+    """Where one edge's session face stands on the center (aiteam.storage.models.SyncIntakeModel)."""
+
+    node: str
+    cursor: int = 0
+    baseline_owner: bool = False
+    applied: int = 0
+    skipped_foreign: int = 0
+    refused: int = 0
+    last_batch_at: AwareDatetime | None = None
+
+
+class SyncNodes(BaseModel):
+    """The nodes whose rows this node holds, for showing and filtering by origin.
+
+    Empty ``nodes`` on a standalone node: no origin is recorded there. ``center_url``
+    is where an edge reaches its center, whose views hold every node's sessions.
+    """
+
+    role: NodeRole
+    node_id: str = ""
+    nodes: list[str] = Field(default_factory=list)
+    center_url: str = ""

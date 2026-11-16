@@ -1,9 +1,14 @@
-"""E31 sync_identity_refused: node.json declares a sync role this machine refused.
+"""E31 sync_identity_refused: the node identity did not hold at startup.
 
-The process then runs standalone (aiteam.sync.node.load_node_status): starting the
-API matters more than syncing, but the user must hear that writes stopped reaching
-the center. The refusal is decided once at startup and kept in aiteam.sync.context,
-so the check reads memory only.
+How the node runs then is decided once at startup (aiteam.sync.node.decide) and kept
+in aiteam.sync.context, so the check reads memory only. The variant says which case:
+
+* ``held`` (the default variant): the database is this machine's sync node; it keeps the node's id and role,
+  its sync channel is stopped;
+* ``unbound``: the database belongs to a node on other hardware; rows get a temporary
+  origin of this machine and nothing syncs;
+* ``standalone``: a node.json was refused and the database never belonged to a sync
+  node; the node runs standalone.
 """
 
 from __future__ import annotations
@@ -12,10 +17,11 @@ from aiteam.services.notices.detectors import DetectContext, Finding, Scope
 from aiteam.sync import context as sync_context
 
 KEY = "sync_identity_refused"
+HELD = "held"  # the default variant
 
 
 class SyncIdentityDetector:
-    """Report a node identity refused at startup."""
+    """Report a node identity that did not hold at startup."""
 
     name = "sync_identity"
     catalog_ids = (KEY,)
@@ -30,5 +36,8 @@ class SyncIdentityDetector:
         return Scope(keys=(KEY,))
 
     async def detect(self, ctx: DetectContext) -> list[Finding]:
-        role = sync_context.refused_role()
-        return [Finding(catalog_id=KEY, key=KEY, params={"role": role})] if role else []
+        trouble = sync_context.identity_trouble()
+        if trouble is None:
+            return []
+        mode, role = trouble
+        return [Finding(catalog_id=KEY, key=KEY, params={"role": role}, variant="" if mode == HELD else mode)]

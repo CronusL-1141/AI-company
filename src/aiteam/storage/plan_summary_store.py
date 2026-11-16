@@ -54,6 +54,8 @@ from aiteam.storage.models import (
     AccountPlanSnapshotModel,
     AccountPlanSummaryModel,
 )
+from aiteam.storage.partition import driver_sql, own
+from aiteam.sync import context as sync_context
 from aiteam.types import PlanUsageSnapshot, PricingPlanAnchor, PricingPlanSnapshot
 
 logger = logging.getLogger(__name__)
@@ -81,13 +83,12 @@ class RebuildChildError(RuntimeError):
 
 
 async def fingerprint(session: AsyncSession, kind: str, account_key: str) -> tuple[int, str | None]:
+    """This node's rows of the account (aiteam.storage.partition): their count and latest id."""
     model = _TABLES[kind]
-    count = await session.scalar(
-        select(func.count()).select_from(model).where(model.account_key == account_key),
-    )
+    mine = (model.account_key == account_key, own(model.origin_node))
+    count = await session.scalar(select(func.count()).select_from(model).where(*mine))
     last = await session.scalar(
-        select(model.id).where(model.account_key == account_key)
-        .order_by(model.observed_at.desc(), model.id.desc()).limit(1),
+        select(model.id).where(*mine).order_by(model.observed_at.desc(), model.id.desc()).limit(1),
     )
     return int(count or 0), last
 
@@ -316,21 +317,24 @@ def anchors_agree(price: Summary, anchors: dict[WindowKey, PricingPlanAnchor]) -
 # ---------------------------------------------------------------- rebuild (child side)
 
 
-def compute_account_summaries(connection: sqlite3.Connection, account_key: str) -> dict[str, Any]:
+def compute_account_summaries(connection: sqlite3.Connection, account_key: str,
+                              origins: list[str] | None = None) -> dict[str, Any]:
     """Fold every window of one account from a consistent read of the database.
 
     Pure over the connection; runs in the rebuild child. Uses the same validation
     and step functions as the insert path, so its output equals what incremental
-    maintenance produces for the same rows.
+    maintenance produces for the same rows. ``origins``: this node's partition
+    (aiteam.storage.partition), None for every row.
     """
+    mine, params = driver_sql(None if origins is None else tuple(origins))
     connection.execute("BEGIN")  # one read transaction: all three reads see one snapshot
     try:
         fingerprints = {}
         rows_by_kind = {}
         for kind, table in (("plan", "account_plan_snapshots"), ("price", "account_plan_price_snapshots")):
             rows = connection.execute(
-                f"SELECT id, payload FROM {table} WHERE account_key = ? ORDER BY observed_at, id",  # noqa: S608
-                (account_key,),
+                f"SELECT id, payload FROM {table} WHERE account_key = ? AND {mine} ORDER BY observed_at, id",  # noqa: S608
+                (account_key, *params),
             ).fetchall()
             rows_by_kind[kind] = rows
             fingerprints[kind] = [len(rows), rows[-1][0] if rows else None]
@@ -422,7 +426,7 @@ def _child_main() -> None:
     request = json.loads(sys.stdin.buffer.read())
     connection = _open_read_only(request["db_path"])
     try:
-        result = compute_account_summaries(connection, request["account_key"])
+        result = compute_account_summaries(connection, request["account_key"], request.get("origins"))
     finally:
         connection.close()
     json.dump(result, sys.stdout, separators=(",", ":"))
@@ -441,7 +445,9 @@ def run_rebuild_child(db_path: str, account_key: str) -> dict[str, Any]:
     if not sys.executable:
         raise RebuildChildError("no interpreter to start the summary rebuild")
     package_root = str(Path(__file__).resolve().parents[2])
-    request = json.dumps({"db_path": db_path, "account_key": account_key})
+    origins = sync_context.own_origins()
+    request = json.dumps({"db_path": db_path, "account_key": account_key,
+                          "origins": list(origins) if origins is not None else None})
     try:
         proc = subprocess.run(
             [sys.executable, "-c", _CHILD_BOOT, package_root],

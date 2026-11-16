@@ -289,3 +289,27 @@ async def test_old_database_without_anchor_table_is_read_compatible(tmp_path):
             )) == 0
     finally:
         await engine_pool.get_engine(url).dispose()
+
+
+def test_an_anchor_chosen_elsewhere_is_stored_only_at_its_own_sample(client):
+    """``PUT .../plan-anchor``: the center stores the anchor an edge chose. The sample must
+    be there with the same values; the revision is counted where it is stored."""
+    connected, repository, state, location = client
+    first = price_snapshot()
+    connected.portal.call(save, repository, first)
+    proposed = connected.portal.call(repository.propose_plan_anchor, KEY, REQUEST)
+    with sqlite3.connect(f"file:{location}?mode=ro", uri=True) as database:  # proposing stores nothing
+        assert database.execute("SELECT count(*) FROM account_plan_price_anchors").fetchone() == (0,)
+    url = f"/api/account-usage/{KEY}/plan-anchor"
+    body = proposed.model_dump(mode="json")
+    elsewhere = connected.put(url, json={**body, "snapshot_id": "not-here"})
+    assert elsewhere.status_code == 409
+    altered = connected.put(url, json={**body, "used_percent": body["used_percent"] + 1})
+    assert altered.status_code == 409
+    assert connected.put(f"/api/account-usage/{'f' * 64}/plan-anchor", json=body).status_code == 400
+    stored = connected.put(url, json={**body, "revision": 7})
+    assert stored.status_code == 200, stored.text
+    assert stored.json()["data"]["revision"] == 1 and stored.json()["data"]["snapshot_id"] == first.snapshot_id
+    assert connected.put(url, json=body).json()["data"] == stored.json()["data"]  # the same sample: unchanged
+    result = get_estimate(connected)[0]
+    assert result["start_snapshot_id"] == first.snapshot_id and result["status"] == "collecting"

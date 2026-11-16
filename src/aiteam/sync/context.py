@@ -15,6 +15,16 @@ from here, and the storage layer reads whether events are to be written.
 * ``role``: the effective role of this process, for code far from the node
   identity that must behave differently on an edge (shared-face governance and
   writes-on-read run on the center and on standalone nodes only).
+* ``own_origins``: the rows this node derives data from and governs (its partition,
+  aiteam.sync.node.governance_scope): None on a standalone node (every row), the
+  node itself on the center, the node and the baseline's empty origin on an edge.
+  Usage projections, quota summaries and the session part of a project's deletion
+  read only these, so the center never recomputes what another node derived.
+* ``effects``: what an operation carried out for another node (the center replaying
+  an edge's write) did to the session face. One node writes the session rows of
+  one origin: the center hands those writes back with its verdict and the edge
+  writes them (aiteam.sync.effects). ``baseline_owner`` is the edge that owns the
+  rows with an empty origin.
 """
 
 from __future__ import annotations
@@ -22,14 +32,17 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from aiteam.ids import operation_ids
 
 _process_origin = ""
 _process_role = "standalone"
-_refused_role = ""
+_identity_trouble: tuple[str, str] | None = None
+_own_origins: tuple[str, ...] | None = None
+_baseline_owner = ""
 _origin: ContextVar[str | None] = ContextVar("aiteam_sync_origin", default=None)
 
 
@@ -39,23 +52,48 @@ class Operation:
     origin: str
     staged: bool
     wall: datetime | None
+    # Session-face writes handed back to ``origin`` (aiteam.sync.effects builds them).
+    effects: list[Any] = field(default_factory=list)
 
 
 _operation: ContextVar[Operation | None] = ContextVar("aiteam_sync_operation", default=None)
 
 
-def set_process_node(node_id: str, role: str, *, refused_role: str = "") -> None:
-    """Record this process's node id and effective role (startup and shutdown only).
+def set_process_node(node_id: str, role: str, *, own_origins: tuple[str, ...] | None = None,
+                     identity_trouble: tuple[str, str] | None = None) -> None:
+    """Record this process's node id, effective role and partition (startup and shutdown only).
 
-    ``refused_role``: the role node.json declared and this machine refused; the
-    process then runs standalone and a notice says so (sync_identity_refused).
+    ``identity_trouble``: (how the node runs, the role it was to have) when its identity
+    did not hold at startup (aiteam.sync.node.decide); a notice says so
+    (sync_identity_refused).
     """
-    global _process_origin, _process_role, _refused_role  # noqa: PLW0603 - one process, one node
-    _process_origin, _process_role, _refused_role = node_id, role, refused_role
+    global _process_origin, _process_role, _identity_trouble, _own_origins  # noqa: PLW0603 - one process, one node
+    _process_origin, _process_role, _identity_trouble, _own_origins = node_id, role, identity_trouble, own_origins
 
 
-def refused_role() -> str:
-    return _refused_role
+def node_id() -> str:
+    """This process's node id (empty on a standalone node)."""
+    return _process_origin
+
+
+def own_origins() -> tuple[str, ...] | None:
+    """The origins of the rows this node derives data from; None: every row."""
+    return _own_origins
+
+
+def set_baseline_owner(node_id: str) -> None:
+    """The edge whose rows the empty origin stands for (the center learns it from its intake)."""
+    global _baseline_owner  # noqa: PLW0603 - one process, one center
+    _baseline_owner = node_id
+
+
+def baseline_owner() -> str:
+    return _baseline_owner
+
+
+def identity_trouble() -> tuple[str, str] | None:
+    """(how the node runs, the role it was to have) when its identity did not hold at startup."""
+    return _identity_trouble
 
 
 def current_origin() -> str:
@@ -86,6 +124,20 @@ def staging() -> bool:
     """True while an edge stands in locally for a write the center will carry out."""
     operation = _operation.get()
     return operation is not None and operation.staged
+
+
+def foreign_effects() -> tuple[str, list[Any]] | None:
+    """(the operation's node, its effects list) while carrying out another node's
+    operation; None otherwise, when session writes happen here as always."""
+    operation = _operation.get()
+    if operation is None or not for_another_node():
+        return None
+    return operation.origin, operation.effects
+
+
+def owner_of(origin_node: str) -> str:
+    """The node that writes a session row of ``origin_node``: the empty origin is the baseline's."""
+    return origin_node or _baseline_owner
 
 
 def operation_wall() -> datetime | None:

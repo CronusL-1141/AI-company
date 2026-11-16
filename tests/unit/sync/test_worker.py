@@ -31,8 +31,9 @@ from aiteam.ids import time_ordered_id
 from aiteam.storage.connection import close_db
 from aiteam.storage.repository import StorageRepository
 from aiteam.sync import ledger
-from aiteam.sync.protocol import SYNC_PROTOCOL, schema_version
-from aiteam.sync.worker import Replay, Worker, open_engine
+from aiteam.sync.protocol import FORWARD_TAIL_ROWS, SYNC_PROTOCOL, schema_version
+from aiteam.sync.upload import Step
+from aiteam.sync.worker import Worker, open_engine
 from aiteam.types import (
     LinkState,
     NodeRole,
@@ -40,8 +41,11 @@ from aiteam.types import (
     SyncChange,
     SyncChangesPage,
     SyncHello,
+    SyncIntakeOutcome,
     SyncOperation,
     SyncOpResult,
+    SyncSessionAck,
+    SyncSessionBatch,
 )
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -137,10 +141,14 @@ def test_the_link_follows_the_probes(edge) -> None:
     ({"schema_version": "0" * 16}, "同步表结构不符"),
     ({"max_seq": 2}, "变更日志与本机记下的不符"),
     ({"cursor_known": False}, "变更日志与本机记下的不符"),
-], ids=["role", "pinned", "protocol", "clock", "schema", "regressed", "replaced"])
+    ({"intake_cursor": 2}, "resend-session"),
+    ({"intake_cursor": 99}, "本机库可能被旧备份恢复"),
+], ids=["role", "pinned", "protocol", "clock", "schema", "regressed", "replaced", "center-lost-sessions",
+        "edge-went-back"])
 def test_a_handshake_that_does_not_match_keeps_the_edge_detached(edge, override, fragment) -> None:
     worker, (_, path) = _worker(edge), edge
-    _sql(path, "UPDATE sync_peers SET center_node_id = 'mini-c0de', cursor = 4, link = 'attached'")
+    _sql(path, "UPDATE sync_peers SET center_node_id = 'mini-c0de', cursor = 4, link = 'attached', "
+               "up_cursor = 3, up_pruned = 3")
     hello = _hello(path, **override)
     problem = worker.handshake_problem(hello, worker.peer())
     assert fragment in problem
@@ -158,7 +166,7 @@ def test_the_probe_asks_whether_the_change_at_the_cursor_is_still_there(edge) ->
     _sql(edge[1], "UPDATE sync_peers SET cursor = 7, cursor_hlc = 'h7'")
     hello, problem = _worker(edge, center).probe()
     assert problem == "" and hello.cursor_known
-    assert dict(seen[0].url.params) == {"cursor": "7", "cursor_hlc": "h7"}
+    assert dict(seen[0].url.params) == {"node": "air-3f9c", "cursor": "7", "cursor_hlc": "h7"}
 
 
 @pytest.mark.parametrize("status", [409, 404, 400, 422], ids=["not-a-center", "old-code", "refused", "invalid"])
@@ -167,7 +175,7 @@ def test_an_answer_that_is_no_verdict_keeps_the_queue_and_detaches(edge, status)
     _sql(path, "UPDATE sync_peers SET link = 'attached'")
     first, second = _queue(edge, "one", staged_pk="t1"), _queue(edge, "two!")
     worker = _worker(edge, lambda request: httpx.Response(status, json={"detail": "nope"}))
-    assert worker.replay() is Replay.DETACHED
+    assert worker.replay() is Step.DETACHED
     assert sorted(_sql(path, "SELECT op_id, state, attempts FROM sync_outbox")) == sorted(
         [(first, "pending", 1), (second, "pending", 0)])
     assert _sql(path, "SELECT link FROM sync_peers") == [("detached",)]
@@ -183,7 +191,7 @@ def test_a_verdict_settles_and_a_temporary_failure_waits_at_the_head(edge) -> No
                                                              status_code=404, ack_seq=3).model_dump_json()),
                     httpx.Response(503, json={"detail": "busy"})])
     worker = _worker(edge, lambda request: next(answers))
-    assert worker.replay() is Replay.WAITING
+    assert worker.replay() is Step.WAITING
     assert dict((op, (state, ack)) for op, state, ack in _sql(path, "SELECT op_id, state, ack_seq FROM sync_outbox")) \
         == {first: ("conflict", 3), second: ("pending", None)}
 
@@ -307,3 +315,155 @@ def test_columns_that_belong_to_one_node_keep_their_local_values(edge) -> None:
         SyncChange(seq=2, table_name="knowledge_links", pk=link_key, row=link)], upto=2, max_seq=2))
     assert _sql(path, "SELECT content, accessed_at FROM memories") == [("new", "2026-03-03")]
     assert _sql(path, "SELECT id != 99, link_type FROM knowledge_links") == [(1, "cites")]
+
+
+
+# -- the session face -----------------------------------------------------------------
+
+class _Center:
+    """A center taking session batches by the intake's rules (gap, stale, cursor) and
+    answering operations; it notes where the session face stood when each arrived."""
+
+    def __init__(self, op_status: int = 200) -> None:
+        self.cursor, self.snapshot, self.op_status = 0, 0, op_status
+        self.batches: list[SyncSessionBatch] = []
+        self.ops: list[tuple[str, int]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/sync/session":
+            batch = SyncSessionBatch.model_validate_json(request.content)
+            self.batches.append(batch)
+            outcome = SyncIntakeOutcome.APPLIED
+            if batch.after > self.cursor:
+                outcome = SyncIntakeOutcome.GAP
+            elif batch.snapshot < self.snapshot:
+                outcome = SyncIntakeOutcome.STALE
+            else:
+                self.cursor, self.snapshot = max(self.cursor, batch.upto), batch.snapshot
+            return httpx.Response(200, content=SyncSessionAck(cursor=self.cursor, outcome=outcome).model_dump_json())
+        if request.url.path == "/api/sync/ops":
+            op = SyncOperation.model_validate_json(request.content)
+            self.ops.append((op.op_id, self.cursor))
+            if self.op_status != 200:
+                return httpx.Response(self.op_status, json={"detail": "not now"})
+            return httpx.Response(200, content=SyncOpResult(op_id=op.op_id, outcome=OpOutcome.APPLIED,
+                                                            status_code=201).model_dump_json())
+        if request.url.path == "/api/sync/changes":
+            return httpx.Response(200, content=SyncChangesPage(upto=0, max_seq=0).model_dump_json())
+        return httpx.Response(404)
+
+
+def _session_rows(path: Path, *names: str) -> None:
+    for name in names:
+        _sql(path, "INSERT INTO events (id, type, source, data, timestamp, origin_node) "
+                   "VALUES (?, 'cc.tool_use', 'test', '{}', '2026-11-15 08:00:00', 'air-3f9c')", name)
+
+
+@pytest.fixture()
+def session_edge(edge):
+    _sql(edge[1], "UPDATE sync_state SET capture = 3")
+    _sql(edge[1], "UPDATE sync_peers SET link = 'attached'")
+    return edge
+
+
+def _latest(path: Path) -> int:
+    return _sql(path, "SELECT coalesce(max(seq), 0) FROM sync_changes")[0][0]
+
+
+def test_an_operation_goes_after_the_session_face_up_to_its_position_and_no_further(session_edge) -> None:
+    _, path = session_edge
+    _session_rows(path, "before-1", "before-2")
+    op_id = _queue(session_edge, "waits for its session")
+    position = _sql(path, "SELECT json_extract(envelope, '$.session_seq') FROM sync_outbox")[0][0]
+    _session_rows(path, "after-1", "after-2")
+    center = _Center()
+    worker = _worker(session_edge, center)
+    assert worker.replay() is Step.DONE
+    assert position == 2 and center.ops == [(op_id, position)]
+    assert all(batch.upto <= position for batch in center.batches)
+    assert {c.pk for b in center.batches for c in b.changes} == {"before-1", "before-2"}
+    assert worker.uploader.upload() is Step.DONE  # behind an empty queue, the rest goes up
+    assert center.cursor == _latest(path) == _sql(path, "SELECT up_cursor FROM sync_peers")[0][0]
+
+
+def test_a_head_that_waits_holds_the_session_face_at_its_position(session_edge) -> None:
+    """While the head is answered 503, rows written after it do not reach the center: an
+    operation replayed later must see the session as it was when it was made."""
+    _, path = session_edge
+    _session_rows(path, "before")
+    _queue(session_edge, "head")
+    position = _sql(path, "SELECT json_extract(envelope, '$.session_seq') FROM sync_outbox")[0][0]
+    _session_rows(path, "later-namesake", "later")
+    center = _Center(op_status=503)
+    worker = _worker(session_edge, center)
+    worker.cycle(probe=False)
+    worker.cycle(probe=False)
+    assert center.cursor == position and len(center.ops) == 2
+    assert _sql(path, "SELECT state, attempts FROM sync_outbox") == [("pending", 2)]
+    center.op_status = 200
+    worker.cycle(probe=False)
+    assert center.ops[-1][1] == position and center.cursor == _latest(path)
+
+
+def test_the_session_face_goes_up_in_bounded_batches(session_edge) -> None:
+    _, path = session_edge
+    con = sqlite3.connect(path)
+    con.executemany("INSERT INTO events (id, type, source, data, timestamp, origin_node) "
+                    "VALUES (?, 'cc.tool_use', 'test', '{}', '2026-11-15 08:00:00', 'air-3f9c')",
+                    [(f"bulk-{n}",) for n in range(1200)])
+    con.commit()
+    con.close()
+    center = _Center()
+    assert _worker(session_edge, center).uploader.upload() is Step.DONE
+    assert [len(batch.changes) for batch in center.batches] == [500, 500, 200]
+    assert center.cursor == _latest(path) == _sql(path, "SELECT up_cursor FROM sync_peers")[0][0]
+
+
+@pytest.mark.parametrize(("answer", "step", "link"), [
+    (httpx.Response(503, json={"detail": "busy"}), Step.WAITING, "attached"),
+    (httpx.Response(409, json={"detail": "not a center"}), Step.DETACHED, "detached"),
+    (httpx.Response(200, content=b"not an ack"), Step.DETACHED, "detached"),
+], ids=["temporary", "no-center", "unreadable"])
+def test_only_an_acknowledgement_moves_the_position(session_edge, answer, step, link) -> None:
+    _, path = session_edge
+    _session_rows(path, "e1")
+    worker = _worker(session_edge, lambda request: answer)
+    assert worker.uploader.upload() is step
+    assert _sql(path, "SELECT up_cursor, link FROM sync_peers") == [(0, link)]
+    assert _sql(path, "SELECT last_error FROM sync_peers")[0][0]
+
+
+def test_a_center_that_lost_the_end_is_sent_it_again_and_one_ahead_of_this_database_stops_it(
+        session_edge) -> None:
+    _, path = session_edge
+    _session_rows(path, "e1", "e2", "e3")
+    center = _Center()
+    worker = _worker(session_edge, center)
+    worker.uploader.upload()
+    center.cursor = center.snapshot = 1  # the center went back: it lost seq 2..3
+    _session_rows(path, "e4")
+    assert worker.uploader.upload() is Step.DONE  # answered GAP, sent again from 1
+    assert {c.pk for c in center.batches[-1].changes} >= {"e2", "e3", "e4"} and center.cursor == _latest(path)
+    center.cursor = center.snapshot = 99  # ahead of this database: it went back
+    _session_rows(path, "e5")
+    assert worker.uploader.upload() is Step.DETACHED
+    assert _sql(path, "SELECT up_cursor, link FROM sync_peers") == [(4, "detached")]
+    assert "本机库可能被旧备份恢复" in _sql(path, "SELECT last_error FROM sync_peers")[0][0]
+
+
+def test_draining_ends_only_once_the_session_face_is_nearly_up(session_edge) -> None:
+    _, path = session_edge
+    _sql(path, "UPDATE sync_peers SET link = 'draining'")
+    con = sqlite3.connect(path)
+    con.executemany("INSERT INTO events (id, type, source, data, timestamp, origin_node) "
+                    "VALUES (?, 'cc.tool_use', 'test', '{}', '2026-11-15 08:00:00', 'air-3f9c')",
+                    [(f"bulk-{n}",) for n in range(FORWARD_TAIL_ROWS + 1)])
+    con.commit()
+    con.close()
+    center = _Center()
+    worker = _worker(session_edge, center)
+    worker.finish_drain(LinkState.DRAINING)
+    assert _sql(path, "SELECT link FROM sync_peers") == [("draining",)]  # one tail would not carry it
+    _sql(path, "UPDATE sync_peers SET up_cursor = 1")
+    worker.finish_drain(LinkState.DRAINING)
+    assert _sql(path, "SELECT link FROM sync_peers") == [("attached",)]

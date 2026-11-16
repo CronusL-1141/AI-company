@@ -1295,6 +1295,18 @@ export const zh = {
     usedInSessions: (count: number) => `${count} 会话用过`,
     freeInput: '自由输入',
   },
+  sync: {
+    nodeFilter: '来源机器',
+    everyNode: '全部机器',
+    beforeCutOver: '切换前',
+    originTitle: (node: string) => `来自 ${node}`,
+    centerView: '全量视图在中心',
+    centerViewHint: '本机只保存本机会话；全部机器的会话在中心的面板里',
+    lastKnown: (when: string) => `最后已知 ${when}`,
+    otherNodesPlan: '其他机器的最新额度',
+    otherNodesPlanHint: '各机器自己采样、自己折算额度周期；这里按观测时间显示它们最新的一次',
+    usedPercent: (value: number) => `已用 ${value}%`,
+  },
 };
 
 // 递归宽化：string叶子→string，函数保留原类型，对象递归

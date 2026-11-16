@@ -7,7 +7,11 @@ an operation's state, so the API's forwards and the worker's replays settle alik
 
 States (aiteam.types.OpState): an operation stays ``pending`` until the center
 answers it with a ``SyncOpResult``; nothing else settles it. ``dropped`` is for a
-write that failed here before anything was staged or sent.
+write that failed here before anything was staged or sent. Settling writes the
+operation's session effects here, in the same transaction (aiteam.sync.effects).
+
+An operation records ``session_seq``, this node's change sequence when it was made:
+the center carries it out once this node's session face is in up to there.
 """
 
 from __future__ import annotations
@@ -17,7 +21,8 @@ from typing import Any, NamedTuple
 from sqlalchemy.engine import Connection
 
 from aiteam.clock import utc_now
-from aiteam.sync.changelog import next_hlc
+from aiteam.sync import effects as session_effects
+from aiteam.sync.changelog import latest_seq, next_hlc
 from aiteam.sync.merge import MergeRule, base_of
 from aiteam.sync.protocol import CENTER_PEER
 from aiteam.sync.replica import Replica
@@ -36,6 +41,8 @@ class Peer(NamedTuple):
     handshake_error: str
     last_error: str
     last_ok_at: str | None
+    up_cursor: int = 0
+    up_pruned: int = 0
 
 
 class Backlog(NamedTuple):
@@ -48,7 +55,7 @@ class Backlog(NamedTuple):
 
 
 _PEER_COLUMNS = ("center_node_id, link, successes, failures, cursor, cursor_hlc, handshake_error, last_error, "
-                 "last_ok_at")
+                 "last_ok_at, up_cursor, up_pruned")
 
 
 def _now() -> str:
@@ -95,23 +102,30 @@ def advance_cursor(conn: Connection, cursor: int, cursor_hlc: str) -> None:
 
 
 def record(conn: Connection, op: SyncOperation) -> SyncOperation:
-    """Queue an operation under a fresh clock value, before anything else happens to it."""
-    op = op.model_copy(update={"hlc": next_hlc(conn)})
+    """Queue an operation under a fresh clock value and this node's change sequence,
+    before anything else happens to it (the session tail of a forward is never kept)."""
+    op = op.model_copy(update={"hlc": next_hlc(conn), "session_seq": latest_seq(conn), "session_tail": None})
     now = _now()
     conn.exec_driver_sql(
         "INSERT INTO sync_outbox (op_id, hlc, envelope, state, staged, outcome, attempts, last_error, "
         "created_at, updated_at) VALUES (?, ?, ?, 'pending', 0, '', 0, '', ?, ?)",
-        (op.op_id, op.hlc, op.model_dump_json(), now, now))
+        (op.op_id, op.hlc, op.model_dump_json(exclude={"session_tail"}), now, now))
     return op
 
 
 def settle(conn: Connection, op_id: str, result: SyncOpResult) -> None:
-    """Record the center's answer to a pending operation; the one mapping of answers to states."""
+    """Record the center's answer to a pending operation; the one mapping of answers to states.
+
+    The operation's session effects are written here once, with the state change.
+    """
     state = OpState.CONFLICT if result.outcome is OpOutcome.CONFLICT else OpState.ACKED
-    conn.exec_driver_sql(
+    staged = conn.exec_driver_sql("SELECT staged FROM sync_outbox WHERE op_id = ?", (op_id,)).scalar()
+    settled = conn.exec_driver_sql(
         "UPDATE sync_outbox SET state = ?, outcome = ?, ack_seq = ?, last_error = '', updated_at = ? "
         "WHERE op_id = ? AND state = ?",
-        (state.value, result.outcome.value, result.ack_seq, _now(), op_id, OpState.PENDING.value))
+        (state.value, result.outcome.value, result.ack_seq, _now(), op_id, OpState.PENDING.value)).rowcount
+    if settled:
+        session_effects.apply(conn, result.effects, staged=bool(staged))
 
 
 def attempt_failed(conn: Connection, op_id: str, error: str) -> None:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import Request
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from aiteam import ids as row_ids
@@ -30,8 +31,15 @@ from aiteam.sync import context as sync_context
 from aiteam.sync.center import Center
 from aiteam.sync.changelog import MIGRATION_HOLDER, reinstall_change_triggers, release, set_node, suppress
 from aiteam.sync.edge import EdgeSync
-from aiteam.sync.node import governance_scope, load_node_status, log_node_status, node_file
-from aiteam.types import AgentStatus, GovernanceScope, NodeRole, NodeStatus, SyncFace
+from aiteam.sync.node import (
+    governance_scope,
+    load_node_status,
+    log_node_status,
+    node_file,
+    register,
+    registered_node,
+)
+from aiteam.types import AgentStatus, GovernanceScope, NodeMode, NodeRole, NodeStatus, SyncFace
 
 logger = logging.getLogger(__name__)
 
@@ -452,8 +460,11 @@ async def _backfill_v150_progressive_funnel(repo: StorageRepository) -> None:
         )
 
 
-async def _auto_create_projects(repo: StorageRepository) -> None:
+async def _auto_create_projects(repo: StorageRepository, origins: tuple[str, ...] | None = None) -> None:
     """Back-fill project_id on orphan Teams from each team's OWN members.
+
+    Teams are the session face: on a node that syncs, each node back-fills its own
+    (``origins``, aiteam.sync.node.governance_scope), never another node's rows.
 
     归属只认「队自己的成员」这一条权威链：Leader 行的 project_id（会话开启时按
     该会话 cwd 锁定，见归属铁律「session 启动目录为准」）优先，其次任一已绑定
@@ -467,7 +478,7 @@ async def _auto_create_projects(repo: StorageRepository) -> None:
     传染给 agent 行与其 system_prompt 里的 {project_path}。
     e812de4 已在 hook_translator 的补绑路径禁掉同类 cwd 兜底，这条启动路径漏网。
     """
-    teams = await repo.list_teams()
+    teams = await repo.list_teams(origins=origins)
     orphan_teams = [t for t in teams if not t.project_id]
     # workflow 队不参与兜底认领：其归属由观测层按落盘 slug（文件真相源）精确
     # 回填（用户 2026-07-07 定案：曾有外部项目的 workflow 队被 API 进程 cwd
@@ -754,10 +765,12 @@ async def init_dependencies(app: object | None = None) -> None:
     )
     _hook_translator = HookTranslator(repo=_repository, event_bus=_event_bus)
     _task_wall_engine = TaskWallEngine(repo=_repository)
-    _asset_backup = await _start_asset_backup(_repository, _db_url, node.node_id)
+    _asset_backup = await _start_asset_backup(_repository, _db_url, node)
 
-    # Startup reconciliation: clear lingering BUSY states (governance, not a migration)
+    # Startup reconciliation: clear lingering BUSY states (governance, not a migration);
+    # link orphan teams to their members' project. Session face: each node its own rows.
     await _startup_reconciliation(_repository, governance)
+    await _auto_create_projects(_repository, governance.origins)
 
     # Backfills write the shared face: on an edge they are the center's to run.
     if governance.shared:
@@ -784,16 +797,19 @@ async def init_dependencies(app: object | None = None) -> None:
     _watchdog_runner.start()
 
 
-async def _start_asset_backup(repo: StorageRepository, db_url: str, node_id: str) -> AssetBackup:
+async def _start_asset_backup(repo: StorageRepository, db_url: str, node: NodeStatus) -> AssetBackup:
     """The workflow backup of this node's enrolled config folders (aiteam.assets).
 
     Its content store sits next to the database whose rows name the contents: the
-    OS data directory, or the directory of an explicit ``AITEAM_DB_PATH``.
+    OS data directory, or the directory of an explicit ``AITEAM_DB_PATH``. Paused on
+    an edge of the multi-host sync until the backup's cross-machine stage.
     """
+    from aiteam.assets.service import EDGE_PAUSE
     from aiteam.storage.connection import default_db_path
 
     backup = AssetBackup(repo=AssetRepository(db_url), projects=lambda: project_roots(repo),
-                         data_dir=default_db_path().parent, node_id=node_id)
+                         data_dir=default_db_path().parent, node_id=node.node_id,
+                         paused=EDGE_PAUSE if node.role is NodeRole.EDGE else "")
     await backup.start()
     return backup
 
@@ -801,48 +817,74 @@ async def _start_asset_backup(repo: StorageRepository, db_url: str, node_id: str
 async def _apply_node_identity(engine: AsyncEngine) -> NodeStatus:
     """Load this node's identity (multi-host sync) and record it where the triggers read it.
 
-    Standalone, the default, captures nothing and keeps random ids. A declared edge or
-    center role that does not hold on this machine is refused: the node runs standalone,
-    and says so in the log and in a pending notice (sync_identity_refused).
-    Edges and the center capture the shared face; the session face does not travel yet.
+    Standalone, the default, captures nothing and keeps random ids. The identity file
+    is checked against this machine and the database's record of its node
+    (aiteam.sync.node.decide): an identity that holds is recorded in the database; a
+    sync node's database whose file is missing or refused keeps its node's id and role
+    with the sync channel stopped (held), one registered to other hardware writes under
+    a temporary origin (unbound). Either is said in the log and in a pending notice
+    (sync_identity_refused). Edges and the center capture the shared face; an edge also
+    captures its session face, which goes up to the center.
     """
     from aiteam.storage.connection import default_db_path
 
-    status = await asyncio.to_thread(load_node_status, node_file(default_db_path()))
+    async with engine.connect() as conn:
+        registration = await conn.run_sync(registered_node)
+    status = await asyncio.to_thread(load_node_status, node_file(default_db_path()), registration)
     log_node_status(status)
-    syncing = status.role is not NodeRole.STANDALONE
-    faces = frozenset({SyncFace.SHARED}) if syncing else frozenset()
+
+    def record(sync_conn: Connection) -> None:
+        set_node(sync_conn, status.node_id, _CAPTURED[status.role])
+        if status.mode is NodeMode.SYNCING and status.identity is not None:
+            register(sync_conn, status.identity)
+
     async with engine.begin() as conn:
-        await conn.run_sync(lambda sync_conn: set_node(sync_conn, status.node_id, faces))
-    row_ids.set_natural_ids(syncing)
-    refused = status.identity.role.value if status.refusal and status.identity is not None else ""
-    sync_context.set_process_node(status.node_id, status.role.value, refused_role=refused or "")
+        await conn.run_sync(record)
+    row_ids.set_natural_ids(status.role is not NodeRole.STANDALONE)
+    declared = registration.role if registration else status.identity.role if status.identity else NodeRole.STANDALONE
+    sync_context.set_process_node(
+        status.node_id, status.role.value, own_origins=governance_scope(status).origins,
+        identity_trouble=(status.mode.value, declared.value) if status.refusal else None)
     return status
+
+
+# The faces each role's change capture records (aiteam.sync.changelog).
+_CAPTURED = {
+    NodeRole.STANDALONE: frozenset(),
+    NodeRole.CENTER: frozenset({SyncFace.SHARED}),
+    NodeRole.EDGE: frozenset({SyncFace.SHARED, SyncFace.SESSION}),
+}
 
 
 async def _start_sync(app: object | None, node: NodeStatus,
                       repo: StorageRepository) -> tuple[Center | None, EdgeSync | None]:
-    """The center's operations and feed, or an edge's write path and worker."""
-    if app is None or node.identity is None or node.role is NodeRole.STANDALONE:
+    """The center's operations and feed, or an edge's write path and worker.
+
+    A held node (its identity file is missing or refused) keeps its write path but no
+    channel: a held center serves no edge, a held edge stages every shared write for
+    the replay that follows once its identity holds again.
+    """
+    if app is None or node.role is NodeRole.STANDALONE:
         return None, None
     if node.role is NodeRole.CENTER:
+        if not node.channel:
+            return None, None
         center = Center.create(app, repo, node.node_id)
+        await center.intake.load()
         pruned = await center.feed.prune()
         if pruned:
             logger.info("Multi-host sync: pruned %d changes older than the retention", pruned)
         return center, None
     from aiteam.storage.connection import default_db_path
 
-    edge = EdgeSync(app, repo.db_url, node.node_id, node.identity.center_url, str(default_db_path()))
-    await edge.start()
+    center_url = node.identity.center_url if node.channel and node.identity is not None else ""
+    edge = EdgeSync(app, repo.db_url, node.node_id, center_url, str(default_db_path()), channel=node.channel)
+    await edge.start(stopped_because=node.refusal)
     return None, edge
 
 
 async def _run_startup_backfills(repo: StorageRepository) -> None:
     """Idempotent data backfills every start runs after the schema is current."""
-    # Auto-create Projects for Teams without project_id
-    await _auto_create_projects(repo)
-
     # Ensure default ecosystem tags exist
     await ensure_default_tags(repo)
 
@@ -930,6 +972,11 @@ def get_sync_node() -> NodeStatus:
 def get_center() -> Center | None:
     """The center's sync, when this node is the center."""
     return _center
+
+
+def get_edge() -> EdgeSync | None:
+    """An edge's sync, when this node is an edge."""
+    return _edge
 
 
 def get_manager() -> TeamManager:

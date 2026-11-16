@@ -45,10 +45,12 @@ async def list_workflow_runs(
     status: str = Query("", description="按状态过滤：planned/running/completed/interrupted/killed/failed"),
     project_id: str = Query("", description="按项目过滤（空=全部项目）"),
     limit: int = Query(50, ge=1, le=200),
+    origin: str | None = Query(None, max_length=64, description="只看这台机器的运行（多机同步）；空串=未记录"),
     repo: StorageRepository = Depends(get_repository),
 ) -> APIListResponse[WorkflowRun]:
     """列出已物化的 workflow 运行（天然排除 workflow-session-* 兜底团队）。"""
-    runs = await repo.list_workflow_runs(project_id=project_id, status=status, limit=limit)
+    runs = await repo.list_workflow_runs(project_id=project_id, status=status, limit=limit,
+                                         origins=None if origin is None else (origin,))
     return APIListResponse(data=runs, total=len(runs))
 
 

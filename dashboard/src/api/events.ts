@@ -8,6 +8,8 @@ export interface EventFilters {
   source?: string;
   limit?: number;
   project_id?: string;
+  /** Only events of this node (multi-host sync); '' for those from before the cut-over. */
+  origin?: string;
 }
 
 function eventsUrl(filters?: EventFilters) {
@@ -17,6 +19,7 @@ function eventsUrl(filters?: EventFilters) {
   if (filters?.source) params.set('source', filters.source);
   if (filters?.limit) params.set('limit', String(filters.limit));
   if (filters?.project_id) params.set('project_id', filters.project_id);
+  if (filters?.origin !== undefined) params.set('origin', filters.origin);
   const qs = params.toString();
   return `/api/events${qs ? `?${qs}` : ''}`;
 }

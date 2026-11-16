@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { TableRow, TableCell } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { RelativeTime } from '@/components/shared/RelativeTime';
+import { NodeBadge } from '@/components/sync/NodeBadge';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import type { Event } from '@/types';
 
@@ -49,7 +50,10 @@ export function EventRow({ event, isNew }: { event: Event; isNew?: boolean }) {
         <TableCell>
           <Badge className={getTypeColor(event.type)}>{event.type}</Badge>
         </TableCell>
-        <TableCell className="text-xs">{event.source}</TableCell>
+        <TableCell className="text-xs">
+          {event.source}
+          {event.origin_node !== undefined && <NodeBadge origin={event.origin_node} className="ml-1" />}
+        </TableCell>
         <TableCell className="text-xs text-muted-foreground max-w-[300px] truncate">
           {getSummary(event.data)}
         </TableCell>

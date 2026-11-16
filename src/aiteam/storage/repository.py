@@ -61,6 +61,7 @@ from aiteam.services.usage_coverage import (
     classify_unattributed,
     is_in_flight,
 )
+from aiteam.storage.cascade import delete_project_session_rows, project_team_ids
 from aiteam.storage.connection import begin_write, get_session
 from aiteam.storage.connection import init_db as _init_db
 from aiteam.storage.models import (
@@ -107,6 +108,7 @@ from aiteam.storage.models import (
 from aiteam.storage.utc_type import UtcDateTime
 from aiteam.surrogates import json_dumps
 from aiteam.sync import context as sync_context
+from aiteam.sync import effects as sync_effects
 from aiteam.types import (
     AGENT_TASK_LINK_FROM_KIND,
     AGENT_TASK_LINK_TO_KIND,
@@ -927,19 +929,16 @@ class StorageRepository:
             # rows and external execution receipts retain their existing protection.
             await session.execute(delete(TaskCreateBatchModel).where(TaskCreateBatchModel.project_id == project_id))
             await session.execute(delete(TaskModel).where(TaskModel.project_id == project_id))
-            # 团队 id 必须**在删 teams 行之前取实**：下面 team 记忆 / events 两处都按
-            # 它清理，若沿用惰性子查询，teams 删掉后子查询恒空——events 那处就一直在
-            # 清了个寂寞（2026-07-27 批 3 实测复现）。
-            team_ids = list(
-                (
-                    await session.execute(
-                        select(TeamModel.id).where(TeamModel.project_id == project_id)
-                    )
-                ).scalars()
-            )
-            # agents 行不删：审计留痕，token 归因记在这些行上，删了不可重建。
-            # Cascade: teams
-            await session.execute(delete(TeamModel).where(TeamModel.project_id == project_id))
+            # 团队 id 必须**在删 teams 行之前取实**：下面 team 记忆按它清理，若沿用惰性
+            # 子查询，teams 删掉后子查询恒空（2026-07-27 批 3 实测复现）。记忆是共享面，
+            # 清理覆盖项目的全部团队。
+            team_ids = await session.run_sync(
+                lambda s: project_team_ids(s.connection(), project_id))
+            # Cascade: teams and their events, the session face. agents 行不删：审计
+            # 留痕，token 归因记在这些行上，删了不可重建。On a node that syncs, only
+            # this node's own sessions: every node deletes its own (aiteam.storage.cascade).
+            await session.run_sync(lambda s: delete_project_session_rows(
+                s.connection(), project_id, sync_context.own_origins()))
             # Cascade: phases
             await session.execute(delete(PhaseModel).where(PhaseModel.project_id == project_id))
             # Cascade: reports
@@ -968,13 +967,6 @@ class StorageRepository:
                     | (CrossMessageModel.to_project_id == project_id)
                 )
             )
-            # Cascade: events for project teams（events 无 team_id 列——
-            # 事件按 entity_id 关联团队，见 list_events 同款用法；此处曾写
-            # EventModel.team_id 致 project_delete 恒 500，2026-07-08 实测）
-            if team_ids:
-                await session.execute(
-                    delete(EventModel).where(EventModel.entity_id.in_(team_ids))
-                )
             # Finally: delete project itself
             await session.execute(delete(ProjectModel).where(ProjectModel.id == project_id))
             return True
@@ -1574,7 +1566,11 @@ class StorageRepository:
             return [r.to_pydantic() for r in rows]
 
     async def update_agent(self, agent_id: str, **kwargs: object) -> Agent:
-        """Update Agent information."""
+        """Update Agent information.
+
+        Multi-host sync: carrying out another node's operation, an agent of that node
+        is not changed here; the change goes back to its node (aiteam.sync.effects).
+        """
         if "status" in kwargs:
             status_val = kwargs["status"]
             if isinstance(status_val, AgentStatus):
@@ -1582,6 +1578,9 @@ class StorageRepository:
             elif isinstance(status_val, str):
                 AgentStatus(status_val)
         values = {key: value for key, value in kwargs.items() if key in AgentModel.__table__.columns}
+        handed_back = await self._hand_back_agent_update(agent_id, values)
+        if handed_back is not None:
+            return await self._announce_agent_update(agent_id, kwargs, handed_back)
         clear_current = func.json_remove(
             func.coalesce(AgentModel.config, literal("{}")), f"$.{AUTO_OFFLINE_KEY}",
         )
@@ -1619,6 +1618,33 @@ class StorageRepository:
                 raise NotFoundError(msg)
             updated = row.to_pydantic()
 
+        return await self._announce_agent_update(agent_id, kwargs, updated)
+
+    async def _hand_back_agent_update(self, agent_id: str, values: dict[str, object]) -> Agent | None:
+        """The agent as the update leaves it, when the update is another node's to make.
+
+        None: the update is made here (no foreign operation, or the center owns the
+        agent). An agent of a third node is left as it is (not routed yet).
+        """
+        foreign = sync_context.foreign_effects()
+        if foreign is None:
+            return None
+        async with get_session(self._db_url) as session:
+            row = (await session.execute(select(AgentModel).where(AgentModel.id == agent_id))).scalar_one_or_none()
+            if row is None:
+                raise NotFoundError(f"Agent {agent_id} 不存在")
+            current, owner = row.to_pydantic(), sync_context.owner_of(row.origin_node)
+        if owner == sync_context.node_id():
+            return None
+        origin, effects = foreign
+        if owner == origin:
+            effects.append(sync_effects.changed_fields(AgentModel.__tablename__, agent_id, values))
+        else:
+            logger.warning("Multi-host sync: an operation of %s would update agent %s of %s; left as it is",
+                           origin, agent_id, owner or "the baseline")
+        return current.model_copy(update={k: v for k, v in values.items() if k in Agent.model_fields})
+
+    async def _announce_agent_update(self, agent_id: str, kwargs: dict[str, object], updated: Agent) -> Agent:
         # 纯心跳不落事件（Q2，用户 2026-07-27 拍板，硬条件"不影响任何检测功能"）。
         # 心跳**检测**分毫未动：判据一直是 agents.last_active_at 这一列，上面已经
         # 写完了；停的只是"顺手再写一行事件"。
@@ -2561,7 +2587,8 @@ class StorageRepository:
         the center will carry out builds the event (its id keeps the operation's id
         sequence aligned with the center's) but does not store it, the center emits
         it; the center carrying out an operation dates its events by the operation's
-        clock, not by the moment of the replay.
+        clock, not by the moment of the replay, and hands them back to the
+        operation's node, which stores them (aiteam.sync.effects).
         """
         timestamp = timestamp if timestamp is not None else sync_context.operation_wall()
         extra = {"timestamp": ensure_utc(timestamp)} if timestamp is not None else {}
@@ -2595,6 +2622,13 @@ class StorageRepository:
         if sync_context.staging():
             return event
         orm = EventModel.from_pydantic(event)
+        foreign = sync_context.foreign_effects()
+        if foreign is not None:
+            # Carrying out another node's operation: the event is that node's to store.
+            origin, effects = foreign
+            values = {c.key: getattr(orm, c.key) for c in EventModel.__table__.columns if c.key != "origin_node"}
+            effects.append(sync_effects.new_row(EventModel.__tablename__, values, origin))
+            return event
         if _session is not None:
             _session.add(orm)
         else:
@@ -2611,8 +2645,11 @@ class StorageRepository:
         entity_id: str | None = None,
         team_ids: list[str] | None = None,
         project_id: str | None = None,
+        *,
+        origins: Collection[str] | None = None,
     ) -> list[Event]:
-        """List events, optionally filtered by type, source, entity, team, or project.
+        """List events, optionally filtered by type, source, entity, team, project or
+        origin (``origins``: see _narrow_to_origins).
 
         Args:
             event_type: Exact match on event type (e.g., "agent.created")
@@ -2647,6 +2684,7 @@ class StorageRepository:
                 stmt = stmt.where(
                     _project_event_scope_clause(project_id, [team.id for team in project_teams])
                 )
+            stmt = self._narrow_to_origins(stmt, EventModel, origins)
             stmt = stmt.order_by(EventModel.timestamp.desc()).limit(limit)
             result = await session.execute(stmt)
             rows = result.scalars().all()

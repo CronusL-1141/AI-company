@@ -57,6 +57,23 @@ def _differing_tables(left: dict, right: dict) -> list[str]:
     return sorted(name for name in names if left["tables"].get(name) != right["tables"].get(name))
 
 
+def _without_new_empty_columns(newer: dict, older: dict) -> dict:
+    """``newer``'s tables without the columns ``older`` lacks and no row of ``newer`` fills.
+
+    A later stage adds columns (an empty one changes nothing a standalone node wrote);
+    a new column that holds a value is a difference and stays in.
+    """
+    tables = {}
+    for name, table in newer["tables"].items():
+        before = older["tables"].get(name)
+        added = [i for i, column in enumerate(table["columns"])
+                 if before is not None and column not in before["columns"]
+                 and all(row[i] is None for row in table["rows"])]
+        tables[name] = {"columns": [c for i, c in enumerate(table["columns"]) if i not in added],
+                        "rows": [[v for i, v in enumerate(row) if i not in added] for row in table["rows"]]}
+    return {**newer, "tables": tables}
+
+
 @pytest.fixture(scope="module")
 def runs(tmp_path_factory) -> dict[str, dict]:
     # One directory for every run: paths that end up in rows are then identical.
@@ -101,5 +118,14 @@ def test_standalone_matches_the_code_before_sync(runs, tmp_path_factory) -> None
     standalone = _run(tmp_path, "standalone")
     base = _run(tmp_path, "base", base_src)
     assert {name for name, count in base["sync_counts"].items() if count} <= {"sync_state"}
-    assert _differing_tables(standalone, base) == []
+    assert _differing_tables(_without_new_empty_columns(standalone, base), base) == []
     assert standalone["requests"] == base["requests"]
+
+
+
+def test_only_new_columns_left_empty_are_set_aside() -> None:
+    older = {"tables": {"t": {"columns": ["id"], "rows": [["a"]]}}}
+    empty = {"tables": {"t": {"columns": ["id", "added"], "rows": [["a", None]]}}}
+    filled = {"tables": {"t": {"columns": ["id", "added"], "rows": [["a", 7]]}}}
+    assert _differing_tables(_without_new_empty_columns(empty, older), older) == []
+    assert _differing_tables(_without_new_empty_columns(filled, older), older) == ["t"]

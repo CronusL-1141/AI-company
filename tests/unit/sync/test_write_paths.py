@@ -26,10 +26,11 @@ from aiteam.storage.repository import StorageRepository
 from aiteam.sync import context as sync_context
 from aiteam.sync import hlc, ledger
 from aiteam.sync.edge import EdgeSync
+from aiteam.sync.intake import Intake
 from aiteam.sync.operations import Operations
 from aiteam.sync.protocol import SYNC_PROTOCOL
 from aiteam.sync.surface import route_surface
-from aiteam.types import OpOutcome, RouteSurface, SyncOperation
+from aiteam.types import OpOutcome, RouteSurface, SyncOperation, SyncOpResult
 
 
 @pytest.fixture()
@@ -56,11 +57,11 @@ async def test_an_edge_never_forwards_past_a_queued_operation(repo) -> None:
         await edge._ledger(lambda conn: conn.exec_driver_sql("UPDATE sync_peers SET link = 'attached'"), write=True)
         earlier = await edge._ledger(ledger.record, _op("/api/reports"), write=True)
         later = await edge._ledger(ledger.record, _op("/api/reports"), write=True)
-        assert not await edge._may_forward(later)  # the earlier one is queued
+        assert await edge._forwardable(later) is None  # the earlier one is queued
         edge._in_flight.add(earlier.op_id)
-        assert await edge._may_forward(later)  # another request is forwarding it right now
+        assert await edge._forwardable(later) is not None  # another request is forwarding it right now
         await edge._ledger(ledger.detach, "gone", write=True)
-        assert not await edge._may_forward(later)
+        assert await edge._forwardable(later) is None
     finally:
         await edge.stop()
 
@@ -108,7 +109,8 @@ def _center_app(release: asyncio.Event, calls: list[str]) -> FastAPI:
 async def test_a_slow_online_write_holds_up_no_other_operation(repo) -> None:
     repository, path = repo
     release, calls = asyncio.Event(), []
-    operations = Operations(_center_app(release, calls), repository, node_id="mini-c0de")
+    operations = Operations(_center_app(release, calls), repository, node_id="mini-c0de",
+                            intake=Intake(repository.db_url, "mini-c0de"))
     slow_op = _op("/slow")
     slow = asyncio.create_task(operations.apply(slow_op))
     again = asyncio.create_task(operations.apply(slow_op))  # the same operation, arriving twice
@@ -162,5 +164,63 @@ async def test_a_queue_that_cannot_drain_turns_the_edge_red(repo) -> None:
         con.close()
         old = await sync_status.read(node, repository.db_url, None)
         assert not old.healthy and any("积压超过" in problem for problem in old.problems)
+    finally:
+        await edge.stop()
+
+
+async def test_a_forward_carries_its_session_tail_only_when_it_fits_one_envelope(repo) -> None:
+    """The center runs an operation only once it has the session face up to the operation:
+    a forward carries the rest when it fits one tail, and is staged otherwise (the worker
+    sends the session face ahead of the replay)."""
+    from aiteam.sync.protocol import FORWARD_TAIL_ROWS
+
+    repository, path = repo
+    con = sqlite3.connect(path)
+    con.execute("UPDATE sync_state SET capture = 3, node_id = 'air-3f9c'")
+    con.commit()
+    con.close()
+    edge = EdgeSync(app=None, db_url=repository.db_url, node_id="air-3f9c", center_url="http://center", db_path="")
+
+    def session_rows(count: int, tag: str) -> None:
+        con = sqlite3.connect(path)
+        con.executemany("INSERT INTO events (id, type, source, data, timestamp, origin_node) VALUES "
+                        "(?, 'cc.tool_use', 'test', '{}', '2026-11-15 08:00:00', 'air-3f9c')",
+                        [(f"{tag}-{n}",) for n in range(count)])
+        con.commit()
+        con.close()
+
+    try:
+        await edge._ledger(ledger.ensure_peer, write=True)
+        await edge._ledger(lambda conn: conn.exec_driver_sql("UPDATE sync_peers SET link = 'attached'"), write=True)
+        session_rows(FORWARD_TAIL_ROWS, "fits")
+        fits = await edge._ledger(ledger.record, _op("/api/reports"), write=True)
+        carried = await edge._forwardable(fits)
+        assert carried is not None and len(carried.session_tail.changes) == FORWARD_TAIL_ROWS
+        assert carried.session_tail.upto >= fits.session_seq
+        await edge._ledger(ledger.settle, fits.op_id, SyncOpResult(op_id=fits.op_id, outcome=OpOutcome.APPLIED,
+                                                                   status_code=201), write=True)
+        session_rows(FORWARD_TAIL_ROWS + 1, "too-many")
+        too_many = await edge._ledger(ledger.record, _op("/api/reports"), write=True)
+        assert await edge._forwardable(too_many) is None
+    finally:
+        await edge.stop()
+
+
+async def test_an_online_only_write_the_center_declined_is_reported_as_not_done(repo) -> None:
+    """A 503 from the center means it did not carry the write out: the caller is told so
+    (503 with the center's reason), not that the result is unknown (504)."""
+    import httpx
+
+    repository, _ = repo
+    edge = EdgeSync(app=None, db_url=repository.db_url, node_id="air-3f9c", center_url="http://center", db_path="")
+    declined = {"detail": "本节点的会话面还没上行到这项操作的位置"}
+    edge._client = httpx.AsyncClient(base_url="http://center", transport=httpx.MockTransport(
+        lambda request: httpx.Response(503, json=declined)))
+    try:
+        await edge._ledger(ledger.ensure_peer, write=True)
+        await edge._ledger(lambda conn: conn.exec_driver_sql("UPDATE sync_peers SET link = 'attached'"), write=True)
+        status, _, body = await edge._online_only(_op("/api/reports/r1"))
+        assert status == 503 and declined["detail"] in json.loads(body)["detail"]
+        assert (await edge._ledger(ledger.read_peer)).link.value == "attached"  # a refusal, not a broken link
     finally:
         await edge.stop()

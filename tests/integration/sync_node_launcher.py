@@ -5,7 +5,8 @@ subprocess), on 127.0.0.1 at ``SYNC_TEST_PORT`` (0: any free port), printing the
 port on the first stdout line. The hardware id is pinned from ``SYNC_TEST_HARDWARE``
 so a node.json written by the test holds on any machine. Timer-driven loops stay off
 (state reaper, watchdog, account monitor, MCP HTTP), as in the equivalence driver,
-except the watchdog when ``SYNC_TEST_WATCHDOG`` gives its patrol interval in seconds.
+except the watchdog when ``SYNC_TEST_WATCHDOG`` gives its patrol interval in seconds,
+and the state reaper when ``SYNC_TEST_REAPER`` gives its interval.
 
 Usage: PYTHONPATH=<src> python3 sync_node_launcher.py
 """
@@ -27,13 +28,17 @@ from aiteam.sync import node as node_module  # noqa: E402
 
 def main() -> None:
     node_module.hardware_uuid = lambda: os.environ["SYNC_TEST_HARDWARE"]
+    from aiteam.api import state_reaper
     from aiteam.loop import watchdog
 
-    patrol = watchdog.WatchdogRunner.start
+    patrol, harvest = watchdog.WatchdogRunner.start, state_reaper.StateReaper.start
     driver.quiet_background()
     if os.environ.get("SYNC_TEST_WATCHDOG"):
         watchdog.WATCHDOG_CHECK_INTERVAL = float(os.environ["SYNC_TEST_WATCHDOG"])
         watchdog.WatchdogRunner.start = patrol
+    if os.environ.get("SYNC_TEST_REAPER"):
+        state_reaper.REAPER_CHECK_INTERVAL = float(os.environ["SYNC_TEST_REAPER"])
+        state_reaper.StateReaper.start = harvest
 
     import uvicorn
 

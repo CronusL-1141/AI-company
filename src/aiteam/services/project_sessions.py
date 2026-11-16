@@ -14,6 +14,7 @@ from pathlib import Path
 
 from aiteam.api import session_probe, session_registry
 from aiteam.clock import ensure_utc, from_timestamp
+from aiteam.storage.partition import is_own
 from aiteam.storage.repository import StorageRepository
 from aiteam.types import Agent, HarnessId, TaskStatus, Team
 
@@ -143,7 +144,13 @@ def _empty(session_id: str) -> dict:
         "started_at": None, "live": False, "ctx_tokens": None, "ctx_window": None,
         "ctx_pct": None, "in_flight_tasks": None, "in_flight_task_ids": [],
         "cc_pid": None, "cc_status": None, "cc_process_alive": None, "observation_at": None,
+        "origin_node": "",
     }
+
+
+def _elsewhere(origin: str) -> bool:
+    """A session of another node (multi-host sync): its files and processes are on that machine."""
+    return not is_own(origin)
 
 
 async def project_sessions(
@@ -164,6 +171,7 @@ async def project_sessions(
         if team.config.get("kind") != "session" or not isinstance(owner, str) or not owner.strip():
             continue
         row = rows.setdefault(owner, _empty(owner))
+        row["origin_node"] = team.origin_node
         recorded = _time(team.created_at)
         if recorded and (not row["started_at"] or recorded < row["started_at"]):
             row["started_at"] = recorded
@@ -189,7 +197,8 @@ async def project_sessions(
         row.update(name=leader.name, model=leader.model or "",
                    harness=leader.harness.value if leader.harness is not None else row["harness"],
                    status=str(leader.status), current_task=leader.current_task or "",
-                   status_source="db_observation")
+                   status_source="remote_observation" if _elsewhere(leader.origin_node) else "db_observation",
+                   origin_node=leader.origin_node)
         observed = _time(leader.last_active_at)
         if observed and (not row["last_active_at"] or observed > row["last_active_at"]):
             row["last_active_at"] = observed
@@ -201,9 +210,14 @@ async def project_sessions(
 
     # The bounded tail read only refines a recent DB observation; old history
     # keeps its DB status instead of costing a file read per request.
+    # Another node's session is shown as that node last reported it: this machine's
+    # files, processes and registry say nothing about it (a copy of its transcript
+    # synced here would read as live).
+    elsewhere = {session_id for session_id, row in rows.items() if _elsewhere(row["origin_node"])}
     native = await asyncio.to_thread(
         lambda: {session_id: _codex_activity(leader, now) for session_id, leader in latest.items()
-                 if leader.harness == HarnessId.CODEX and _fresh(_time(leader.last_active_at), now)},
+                 if leader.harness == HarnessId.CODEX and _fresh(_time(leader.last_active_at), now)
+                 and session_id not in elsewhere},
     )
     for session_id, observation in native.items():
         if observation is None:
@@ -217,6 +231,8 @@ async def project_sessions(
 
     for probe in probes:
         session_id = probe["session_id"]
+        if session_id in elsewhere:
+            continue
         row = rows.setdefault(session_id, _empty(session_id))
         row.update(name=f"CEO-{probe['name']}", model=probe.get("model") or row["model"],
                    harness=HarnessId.CLAUDE_CODE.value)
@@ -231,7 +247,8 @@ async def project_sessions(
             row["last_active_at"] = observed
 
     for row in rows.values():
-        row.update(registry.get(row["session_id"], {}))
+        if row["session_id"] not in elsewhere:
+            row.update(registry.get(row["session_id"], {}))
         # Registry status is a host-reported activity observation. PID liveness
         # alone is not used: the existing probe cannot guard against PID reuse.
         if row.get("cc_status") in {"busy", "idle"} and row.get("cc_process_alive") is not False:

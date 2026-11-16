@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
 import { GlobalSearch } from '@/components/layout/GlobalSearch';
+import { NodeFilter } from '@/components/sync/NodeFilter';
 import { useT, type Translations } from '@/i18n';
 
 type NavTitles = Translations['nav'];
@@ -44,6 +45,7 @@ export function Header() {
       <SidebarTrigger />
       <Separator orientation="vertical" className="h-5" />
       <h1 className="text-lg font-semibold">{title}</h1>
+      <NodeFilter />
       <GlobalSearch />
     </header>
   );

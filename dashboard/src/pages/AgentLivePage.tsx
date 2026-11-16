@@ -1,3 +1,5 @@
+import { byNode } from '@/lib/nodes';
+import { useNodeFilter } from '@/stores/nodeFilter';
 import { useState, useMemo } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +25,8 @@ import { agentKindLabel, isFreshWorking, readableAgentName } from '@/lib/agentPr
 // Aggregate agents across active teams, optionally scoped to a project
 function useAllAgents(projectId?: string) {
   const { data: teamsData, isLoading: teamsLoading, error: teamsError } = useTeams();
-  const activeTeams = (teamsData?.data ?? []).filter((t) => {
+  const node = useNodeFilter((state) => state.node);
+  const activeTeams = byNode(teamsData?.data ?? [], node).filter((t) => {
     if (t.status !== 'active') return false;
     if (projectId) return t.project_id === projectId;
     return true;

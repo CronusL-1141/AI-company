@@ -7,6 +7,10 @@ reads an enrolled folder: nothing here writes into one.
 
 Every answer to a scan hit is recorded as an ``asset.scan_resolved`` event with the
 session that gave it, the file, the content hash and the user's own words.
+
+Every write here runs on the machine whose folder it concerns (the session face of
+the sync). On an edge of the multi-host sync the backup is paused until its
+cross-machine stage: these writes answer 409 with the reason.
 """
 
 from __future__ import annotations
@@ -22,7 +26,6 @@ from aiteam.api.event_bus import EventBus
 from aiteam.assets.service import AssetBackup, EnrollRefusedError
 from aiteam.ids import normalize_root_path
 from aiteam.paths import cc_config_dir, install_records, own_cc_config_dir
-from aiteam.sync.surface import route_surface
 from aiteam.types import (
     AssetBackupRunRequest,
     AssetEnrollRequest,
@@ -36,8 +39,16 @@ from aiteam.types import (
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 # Sync face of these routes (aiteam.sync.surface): a folder is read and enrolled by
-# the machine it is on, so its requests are handled there.
+# the machine it is on, and its scan hits answered there, so its requests are
+# handled there (the asset rows travel in the backup's cross-machine stage).
 ROUTE_SURFACE = RouteSurface.session()
+
+
+def _writable_backup(backup: AssetBackup = Depends(get_asset_backup)) -> AssetBackup:
+    """The backup, for a write; 409 with the reason while it is paused on this node."""
+    if backup.paused:
+        raise HTTPException(status_code=409, detail=backup.paused)
+    return backup
 
 # How long a manual run is waited for before the answer says it is still running.
 RUN_WAIT_SECONDS = 20.0
@@ -76,7 +87,7 @@ async def backup_status(host: AssetHost | None = Query(default=None),
 
 
 @router.post("/roots")
-async def enroll_root(body: AssetEnrollRequest, backup: AssetBackup = Depends(get_asset_backup)) -> dict:
+async def enroll_root(body: AssetEnrollRequest, backup: AssetBackup = Depends(_writable_backup)) -> dict:
     """Enroll a config folder into a profile (and compare it at once), or mark it ignored."""
     if body.host != AssetHost.CLAUDE:
         raise HTTPException(status_code=400, detail="Codex home 的备份在 Codex 线的阶段提供，当前只支持 claude")
@@ -96,7 +107,7 @@ async def enroll_root(body: AssetEnrollRequest, backup: AssetBackup = Depends(ge
 
 
 @router.post("/run")
-async def run_backup(body: AssetBackupRunRequest, backup: AssetBackup = Depends(get_asset_backup)) -> dict:
+async def run_backup(body: AssetBackupRunRequest, backup: AssetBackup = Depends(_writable_backup)) -> dict:
     """Compare an enrolled folder now (not throttled) and wait a little for the outcome."""
     root_id = body.root_id
     if not root_id:
@@ -114,9 +125,8 @@ async def run_backup(body: AssetBackupRunRequest, backup: AssetBackup = Depends(
 
 
 @router.post("/findings/resolve")
-@route_surface(RouteSurface.shared(offline_ok=True))
 async def resolve_finding(body: AssetScanResolveRequest, request: Request,
-                          backup: AssetBackup = Depends(get_asset_backup),
+                          backup: AssetBackup = Depends(_writable_backup),
                           bus: EventBus = Depends(get_event_bus)) -> dict:
     """The user's answer to a scan hit: allow that content (it uploads), or exclude the path for good."""
     disposition = AssetScanDisposition.ALLOWED if body.action == "allow" else AssetScanDisposition.EXCLUDED

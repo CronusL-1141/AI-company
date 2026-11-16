@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from aiteam.api.deps import get_hook_translator, get_manager, get_repository, get_scoped_repository
 from aiteam.api.hook_translator import HookTranslator
@@ -68,10 +68,11 @@ def _resolve_cc_pids(teams: list[Team]) -> list[Team]:
 
 @router.get("", response_model=APIListResponse[Team])
 async def list_teams(
+    origin: str | None = Query(None, max_length=64, description="Only teams of this node; empty: not recorded"),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Team]:
-    """List all teams."""
-    teams = _resolve_cc_pids(await repo.list_teams())
+    """List all teams (``origin``: the node whose session they belong to, multi-host sync)."""
+    teams = _resolve_cc_pids(await repo.list_teams(origins=None if origin is None else (origin,)))
     return APIListResponse(data=teams, total=len(teams))
 
 

@@ -22,6 +22,7 @@ async def list_events(
     entity_id: str | None = Query(None, description="Filter by entity ID (task/agent/team/meeting)"),
     limit: int = Query(50, ge=1, le=200, description="Return count limit"),
     project_id: str = Query("", description="Filter events by project (including teamless tasks)"),
+    origin: str | None = Query(None, max_length=64, description="Only events of this node; empty: not recorded"),
     repo: StorageRepository = Depends(get_scoped_repository),
 ) -> APIListResponse[Event]:
     """List system events, optionally filtered by type, source, entity_id, or project."""
@@ -32,5 +33,6 @@ async def list_events(
         entity_id=entity_id,
         limit=limit,
         project_id=project_id or None,
+        origins=None if origin is None else (origin,),
     )
     return APIListResponse(data=events, total=len(events))

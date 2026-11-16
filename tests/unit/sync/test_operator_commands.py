@@ -157,9 +157,12 @@ async def test_a_refused_identity_is_a_pending_notice() -> None:
     detector = SyncIdentityDetector()
     try:
         assert await detector.detect(None) == []  # type: ignore[arg-type]
-        sync_context.set_process_node("", "standalone", refused_role="edge")
+        sync_context.set_process_node("air-3f9c", "edge", identity_trouble=("held", "edge"))
         findings = await detector.detect(None)  # type: ignore[arg-type]
-        assert [(f.catalog_id, f.params) for f in findings] == [("sync_identity_refused", {"role": "edge"})]
+        assert [(f.catalog_id, f.params, f.variant) for f in findings] == [
+            ("sync_identity_refused", {"role": "edge"}, "")]
+        sync_context.set_process_node("unbound-1a2b3c4d", "standalone", identity_trouble=("unbound", "edge"))
+        assert [f.variant for f in await detector.detect(None)] == ["unbound"]  # type: ignore[arg-type]
     finally:
         sync_context.set_process_node("", "standalone")
 

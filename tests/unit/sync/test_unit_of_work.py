@@ -19,6 +19,7 @@ from sqlalchemy import text
 from aiteam.storage.connection import close_db, unit_of_work
 from aiteam.storage.repository import StorageRepository
 from aiteam.sync import context as sync_context
+from aiteam.types import SyncEffectKind
 
 
 @pytest.fixture()
@@ -74,17 +75,21 @@ async def test_an_error_leaving_the_block_undoes_everything(repo) -> None:
     assert project_after.title == "after"  # the database is usable again
 
 
-async def test_events_of_a_staged_write_are_not_stored_and_an_applied_one_keeps_its_time(repo) -> None:
+async def test_no_event_of_another_nodes_operation_is_stored_here_and_one_goes_back_with_its_time(repo) -> None:
+    """A staged write's events are the center's to emit; the center's, for an edge's
+    operation, are the edge's to store: they go back in the verdict, dated by the operation."""
     repository, path = repo
-    with sync_context.operation("0193a3e4-0000-7000-8000-000000000001", origin="air-3f9c", staged=True):
-        staged = await repository.create_event("task.created", "test", {"n": 1})
+    with sync_context.operation("0193a3e4-0000-7000-8000-000000000001", origin="air-3f9c", staged=True) as staged:
+        await repository.create_event("task.created", "test", {"n": 1})
     wall = datetime(2026, 11, 15, 1, 2, 3, tzinfo=UTC)
     with sync_context.operation("0193a3e4-0000-7000-8000-000000000002", origin="air-3f9c", staged=False,
-                                wall=wall):
-        applied = await repository.create_event("task.created", "test", {"n": 2})
-    stored = _rows(path, "SELECT id, timestamp FROM events ORDER BY timestamp")
-    assert [row[0] for row in stored] == [applied.id] and staged.id != applied.id
-    assert stored[0][1].startswith("2026-11-15 01:02:03") or stored[0][1].startswith("2026-11-15T01:02:03")
+                                wall=wall) as applied:
+        event = await repository.create_event("task.created", "test", {"n": 2})
+    assert _rows(path, "SELECT id FROM events") == [] and staged.effects == []
+    [effect] = applied.effects
+    assert (effect.kind, effect.table_name, effect.pk) == (SyncEffectKind.EVENT, "events", event.id)
+    assert effect.row["origin_node"] == "air-3f9c" and effect.row["data"] == '{"n": 2}'
+    assert effect.row["timestamp"].startswith("2026-11-15 01:02:03")
 
 
 async def test_rows_carry_the_origin_of_the_operation_they_were_written_for(repo) -> None:
