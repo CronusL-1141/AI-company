@@ -674,6 +674,17 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 - en：`[AI Team OS] OS service is starting (MCP launches it automatically, usually within seconds)`（91 列）
 - model_note：服务由 MCP 自动拉起，通常几秒内就绪，不要马上调用 `os_restart_api`；用户发下一条消息时 OS 会再检查，已就绪就补上本次启动没能注入的内容，仍连不上才提示重启。
 
+### E32 `feedback_intro` 可以直接反馈给 OS 维护者（2026-11-15 增补，任务 48f94497）
+
+- 类别 status，灰；宿主 cc、codex（`per_host`）；时机 session_start；去重 once；消除 auto；frame act（模型被要求在用户提到 OS 的问题时主动提出）。E25 至 E31 见各自的设计稿（config-dir-compat、工作流备份、多机同步），编号按目录顺序。
+- 检测（`detectors/feedback_intro.py`）：只有本 API 进程注册了反馈工具时才命中，判据与工具注册同一套读法（`toolsets.tool_registered("feedback", "feedback_draft", os.environ)`：`AITEAM_TOOLSETS` 含 feedback 组、且不在 `AITEAM_READONLY` 只读档）。Codex 用的 HTTP MCP 就在这个进程里按这份环境注册；CC 会话的 MCP server 以自己的环境拉起 API。`AITEAM_TOOLSETS=default` 或只读档时不命中，已有的未送达行随之清除。
+- 每个宿主只说一次：该宿主有过一次已输出的送达之后，检测器不再返回它，行被清除，`notice_list` 与 Dashboard 里不再常驻；`dedup=once` 另外保证同一宿主不再显示。
+- key：`feedback_intro:<宿主>`
+- zh：`[AI Team OS] 对 AI Team OS 有问题或建议，直接跟我说就行。我整理好给你过目，你确认后自动提交到 GitHub：问题发成 Issue，建议发到讨论区，已有人提过的追加到原帖下。`（160 列）
+- en：`[AI Team OS] An AI Team OS problem or idea? Just tell me. I draft it for you to check; once you confirm it goes to GitHub as an Issue, Discussion or reply.`（155 列）
+- 中文用户行按维护者定稿压到 160 列上限：定稿原文为「现在对 AI Team OS 有任何问题或建议，直接跟我说就行。我整理好给你过目，你确认后会自动提交到 GitHub：问题发成 Issue，建议发到讨论区，已有人提过的追加到原帖下面。」（含前缀 172 列），删去「现在」「任何」「会」「面」。
+- model_note：用户提到 OS 的 bug 或需求时，主动提出帮他走 `feedback_draft`。
+
 ### 6.1 条目属性汇总
 
 | 条目 | 类别与颜色 | 宿主 | 时机 | 去重 | 消除 | 本地副本 |
@@ -698,6 +709,7 @@ def record_local(host: str, kind: str, **fields) -> None: ...
 | E18 至 E22 blocked_* | blocked 红 | cc | immediate | 每会话 | once | 是 |
 | E23 more_pending | status 灰 | cc codex | 合成 | 每次输出 | 不入账本 | 否 |
 | E24 api_starting | status 灰 | cc codex | local | 每会话 | auto | 是 |
+| E32 feedback_intro | status 灰 | cc codex（各自一次） | session_start | once | auto | 否 |
 
 原编号对照：N1 对应 E11；N1b 对应 E12；N1c 对应 E13；N2 对应 E14；N3 对应 E15；N4 对应 E08；N5 作废；N6 对应 E16；N7 并入 E02；N8 对应 E06；N9 对应 E09；N10 至 N10c 移到 P2；N11 对应 E01；N12 对应 E03、E04、E05；N13 对应 E07；N14 对应 E10；N15 对应 E17；N16 移到后续批次。
 

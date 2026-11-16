@@ -10,7 +10,7 @@ from aiteam.sync import tables
 
 def test_the_real_models_are_consistent() -> None:
     assert tables.schema_problems(Base.metadata.tables) == []
-    assert len(tables.SESSION_TABLES) + len(tables.SHARED_TABLES) == len(tables.SYNCED_TABLES) == 50
+    assert len(tables.SESSION_TABLES) + len(tables.SHARED_TABLES) == len(tables.SYNCED_TABLES) == 51
 
 
 def _problems_for(*tables_: Table) -> list[str]:

@@ -72,7 +72,13 @@ class LiveAPI:
             "AITEAM_DB_PATH": str(tmp_path / "core.db"), "AITEAM_API_URL": self.base,
             "XDG_CACHE_HOME": str(tmp_path / "cache"), "TMPDIR": str(tmp_path),
             "NO_PROXY": "127.0.0.1,localhost", "LC_ALL": "zh_CN.UTF-8", "CLAUDE_CODE_ENTRYPOINT": "cli",
+            # The scenarios below count start candidates. The once-per-host feedback
+            # introduction (E32, tests/unit/notices/test_feedback_intro.py) is said only
+            # where this process registers the feedback tools: pinned off here, so the
+            # counts do not follow the developer's own AITEAM_TOOLSETS.
+            "AITEAM_TOOLSETS": "default",
         })
+        env.pop("AITEAM_READONLY", None)
         self.env = env
         self.process: subprocess.Popen | None = None
         self.client = httpx.Client(base_url=self.base, timeout=10, trust_env=False)

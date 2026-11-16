@@ -1,0 +1,42 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are where new capabilities and changes to how AI Team OS works get discussed before anyone builds them. Describe the problem first: a concrete workflow you are stuck in is worth more than a finished design.
+
+        - **Something broke?** That is a [bug report](https://github.com/CronusL-1141/AI-company/issues/new?template=bug_report.yml).
+        - **In a Claude Code or Codex session** you can ask the assistant to post this for you (`/os-feedback` in Claude Code). It removes personal paths and names, and shows you the exact text before anything is sent. Ideas posted that way have the same sections as this form.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that AI Team OS makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Optional. How you imagine it working (a tool, a hook, a Dashboard page, ...).
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Workarounds you tried, or existing tools that almost do it.
+  - type: input
+    id: version
+    attributes:
+      label: AI Team OS version
+      description: Optional. The version you were using when the need came up.
+      placeholder: "1.16.0"
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Optional. The host and its version, the operating system, the CPU architecture.
+      placeholder: "Claude Code 2.1.3, macOS 15.1, arm64"
+  - type: textarea
+    id: original
+    attributes:
+      label: Original wording
+      description: Optional. If you first described the idea in another language, paste your own words here so nothing is lost in translation.

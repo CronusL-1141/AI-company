@@ -327,6 +327,15 @@ def _process_started_at(pid: int) -> float | None:
     return _cc_parent_started_at[pid]
 
 
+def caller_host() -> str:
+    """Which host this MCP server serves: cc when Claude Code gave it a session id, else codex.
+
+    The OS MCP server is started by one of two hosts. Claude Code always injects
+    CLAUDE_CODE_SESSION_ID; the Codex adapter's server runs without it.
+    """
+    return "cc" if _cc_session_id() else "codex"
+
+
 def _cc_session_id_resolver(ctx: Any = None) -> str | None:
     """CC resolver: the conversation id of the CC process that spawned this server.
 

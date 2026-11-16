@@ -32,6 +32,10 @@ def isolated_home(tmp_path, monkeypatch):
     for name in ("LC_ALL", "LC_MESSAGES", "LANGUAGE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LANG", "C")
+    # E32 (feedback_intro) would add a line to every first session start of these tests,
+    # whatever they are about: run them with the core tool profile, where it is not said.
+    # tests/unit/notices/test_feedback_intro.py sets the profile per case.
+    monkeypatch.setenv("AITEAM_TOOLSETS", "default")
     from aiteam.api.routes import settings
 
     monkeypatch.setattr(settings, "_config_path", lambda: tmp_path / "wake_config.json")

@@ -24,6 +24,7 @@ from aiteam.mcp._base import (
     _current_cwd,
     _get_api_url,
     _resolve_project_id,
+    caller_host,
     pick_active_team,
 )
 from aiteam.mcp.tools.views import (
@@ -492,15 +493,6 @@ def _append_local_record(host: str, record: dict[str, Any]) -> bool:
     except OSError:
         return False
     return append_record_line(path, record)
-
-
-def _caller_host() -> str:
-    """Which host this MCP server serves: cc when Claude Code gave it a session id, else codex.
-
-    The OS MCP server is started by one of two hosts. Claude Code always injects
-    CLAUDE_CODE_SESSION_ID; the Codex adapter's server runs without it.
-    """
-    return "cc" if _cc_session_id() else "codex"
 
 
 def _record_config_write(data: dict[str, Any]) -> dict[str, Any]:
@@ -1012,7 +1004,7 @@ def register(mcp, *, tool_surface=None):
         # applying writes them. Both run in a worker thread, as do the HTTP calls
         # that record the result, so the event loop keeps serving other calls.
         session_id = _cc_session_id()
-        caller = {"host": _caller_host(), "session_id": session_id, "tool": "os_config_change"}
+        caller = {"host": caller_host(), "session_id": session_id, "tool": "os_config_change"}
         try:
             if not confirm_token:
                 return await asyncio.to_thread(config_change.preview, change)

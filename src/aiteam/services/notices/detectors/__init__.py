@@ -125,6 +125,7 @@ def _registry() -> tuple[Detector, ...]:
     from aiteam.services.notices.detectors.codex_trust import CodexTrustDetector
     from aiteam.services.notices.detectors.data_dir import DataDirDetector
     from aiteam.services.notices.detectors.decisions import DecisionsDetector
+    from aiteam.services.notices.detectors.feedback_intro import FeedbackIntroDetector
     from aiteam.services.notices.detectors.host_versions import HostVersionsDetector
     from aiteam.services.notices.detectors.installed_copies import InstalledCopiesDetector
     from aiteam.services.notices.detectors.registration import RegistrationDetector
@@ -144,6 +145,7 @@ def _registry() -> tuple[Detector, ...]:
         DataDirDetector(),
         AssetBackupDetector(),
         SyncIdentityDetector(),
+        FeedbackIntroDetector(),
     )
 
 

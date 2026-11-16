@@ -288,6 +288,11 @@ class EventType(enum.StrEnum):
     # Workflow asset backup: the user's answer to a secret-scan hit (audit)
     ASSET_SCAN_RESOLVED = "asset.scan_resolved"
 
+    # Feedback on GitHub (audit): what was published and how the user confirmed it;
+    # what was held back (rules and lines, never the text)
+    FEEDBACK_SUBMITTED = "feedback.submitted"
+    FEEDBACK_REFUSED = "feedback.refused"
+
     # Watchdog patrol events
     WATCHDOG_ALERT = "watchdog.alert"
     WATCHDOG_AGENT_RECOVERED = "watchdog.agent_recovered"
@@ -3669,6 +3674,165 @@ class AssetBackupRunRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     root_id: str = Field(default="", max_length=64)
+
+
+# ============================================================
+# Feedback to the OS maintainers on GitHub (aiteam.feedback)
+# ============================================================
+
+
+class FeedbackKind(enum.StrEnum):
+    """What the user reports: a bug (an Issue) or an idea (a Discussion in Ideas).
+
+    ``security`` and ``question`` are never filed: a security report goes to the
+    repository's private advisory form, a question to the Q&A discussions.
+    """
+
+    BUG = "bug"
+    IDEA = "idea"
+    SECURITY = "security"
+    QUESTION = "question"
+
+
+class FeedbackMode(enum.StrEnum):
+    """A new Issue or Discussion, or a comment on an existing one."""
+
+    NEW = "new"
+    COMMENT = "comment"
+
+
+class FeedbackStatus(enum.StrEnum):
+    """Where one draft stands.
+
+    draft: frozen text, waiting for the user's confirmation (expires after 30 minutes).
+    sending: claimed for publishing, the gh call under way. sent: on GitHub.
+    unknown: the gh call timed out (or the API stopped during it); reconciled on the
+    next read. failed: not on GitHub (a new draft of the same text may be filed).
+    handed_off: a prefilled GitHub page was handed to the user, who submits it there.
+    refused: held back by the secret, input or private-term checks (no text kept).
+    expired: never confirmed in time.
+    """
+
+    DRAFT = "draft"
+    SENDING = "sending"
+    SENT = "sent"
+    UNKNOWN = "unknown"
+    FAILED = "failed"
+    HANDED_OFF = "handed_off"
+    REFUSED = "refused"
+    EXPIRED = "expired"
+
+
+# The statuses that hold the claim on publishing a text: at most one row per text.
+FEEDBACK_LIVE_STATUSES = frozenset({FeedbackStatus.SENDING, FeedbackStatus.SENT, FeedbackStatus.UNKNOWN})
+
+
+class FeedbackRoute(enum.StrEnum):
+    """How a draft reaches GitHub once the user confirms it.
+
+    gh: the user's gh. app: OS's GitHub App user token (aiteam.feedback.auth). auth: no
+    credential yet, and the client can show dialogs: the user authorizes the App on
+    GitHub, then it goes as app. web: the user submits a prefilled page.
+    """
+
+    GH = "gh"
+    APP = "app"
+    AUTH = "auth"
+    WEB = "web"
+
+
+class FeedbackConfirmMethod(enum.StrEnum):
+    """How the user confirmed publishing. Only the client's own dialog counts: no agent's word does."""
+
+    ELICITATION = "elicitation"
+
+
+FeedbackText = Annotated[LongText, Field(max_length=20_000)]
+
+
+class FeedbackDraftRequest(BaseModel):
+    """What the agent drafted with the user: the text is checked, cleaned and frozen as a draft.
+
+    ``body`` is what happened (bug) or the problem (idea), or the comment itself.
+    ``host`` and ``host_version`` come from the MCP client's own handshake.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: FeedbackKind
+    title: SingleLineText = Field(default="", max_length=200)
+    body: FeedbackText = ""
+    steps: FeedbackText = ""
+    proposal: FeedbackText = ""
+    alternatives: FeedbackText = ""
+    original: FeedbackText = ""
+    original_language: str = Field(default="", max_length=16, pattern=r"^$|^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$")
+    comment_on: str = Field(default="", max_length=32, pattern=r"^$|^(?:issue|discussion):[1-9][0-9]{0,8}$")
+    host: Literal["cc", "codex"] = "cc"
+    host_label: SingleLineText = Field(default="", max_length=64)
+    host_version: SingleLineText = Field(default="", max_length=64)
+    # Whether the MCP client declared it can show dialogs (from its handshake): without
+    # gh or a stored token, only such a client can have the user authorize the App.
+    dialog: bool = False
+    author: SingleLineText = Field(default="", max_length=100)
+
+
+class FeedbackSubmitRequest(BaseModel):
+    """Publish a draft. Only after the client's dialog: the method, the user's action, the hash shown."""
+
+    model_config = ConfigDict(extra="forbid")
+    confirm_method: FeedbackConfirmMethod
+    action: Literal["accept"]
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FeedbackDeviceRequest(BaseModel):
+    """Start (or return the open) GitHub authorization of OS's App for one confirmed draft."""
+
+    model_config = ConfigDict(extra="forbid")
+    draft_id: str = Field(min_length=1, max_length=64)
+
+
+class FeedbackHandoffRequest(BaseModel):
+    """Hand a draft to the user as a prefilled GitHub page, and why it is not sent by OS."""
+
+    model_config = ConfigDict(extra="forbid")
+    reason: SingleLineText = Field(min_length=1, max_length=200)
+
+
+class FeedbackSubmission(BaseModel):
+    """One row of the feedback ledger (``feedback_submissions``)."""
+
+    id: str
+    kind: FeedbackKind
+    mode: FeedbackMode
+    target_repo: str
+    target_ref: str = ""
+    repository_id: str = ""
+    category_id: str = ""
+    target_node_id: str = ""
+    title: str = ""
+    fields: dict[str, str] = Field(default_factory=dict)
+    body: str = ""
+    diagnostics: dict[str, str] = Field(default_factory=dict)
+    language: str = ""
+    content_hash: str
+    status: FeedbackStatus
+    route: str = ""
+    refusal: list[dict[str, Any]] = Field(default_factory=list)
+    confirm_method: str = ""
+    confirmed_at: AwareDatetime | None = None
+    remote_number: int | None = None
+    remote_url: str = ""
+    gh_login: str = ""
+    session_id: str = ""
+    mcp_session_id: str = ""
+    author: str = ""
+    project_id: str = ""
+    error: str = ""
+    origin_node: str = ""
+    created_at: AwareDatetime
+    sent_at: AwareDatetime | None = None
+    updated_at: AwareDatetime
 # A shared-face write of an edge's own governance: (method, path, JSON body) ->
 # (status, parsed answer): the edge's sync makes it an ordinary operation.
 SharedWriter = Callable[[str, str, dict[str, Any]], Awaitable[tuple[int, Any]]]

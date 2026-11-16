@@ -1,21 +1,33 @@
 name: Feature request
-description: Propose a capability or an improvement
+description: A scoped improvement, ideally one already discussed in Ideas
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        **New ideas start in [Ideas](https://github.com/CronusL-1141/AI-company/discussions/categories/ideas).** Ideas is where a need gets discussed and shaped before anyone builds it, and it does not crowd the issue list. Use this form when the change is already agreed there, or when it is small and concrete enough to need no discussion.
   - type: textarea
     id: problem
     attributes:
       label: The problem
-      description: What are you trying to do that the OS currently makes hard? Concrete workflow beats abstract wish.
+      description: What are you trying to do that AI Team OS makes hard today?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution
-      description: How you imagine it working (tool, hook, Dashboard surface, ...). Optional - a well-described problem is already valuable.
+      description: How it should work (a tool, a hook, a Dashboard page, ...).
+    validations:
+      required: true
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Workarounds you tried, or existing tools that almost do it.
+      description: Optional. Workarounds you tried, or existing tools that almost do it.
+  - type: input
+    id: discussion
+    attributes:
+      label: Discussion
+      description: Optional. Link to the Ideas discussion this comes from.
+      placeholder: "https://github.com/CronusL-1141/AI-company/discussions/..."

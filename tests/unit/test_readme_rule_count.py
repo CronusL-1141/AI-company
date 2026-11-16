@@ -113,8 +113,8 @@ def test_top5_mentions_are_not_rule_count_claims(scratch_repo, name, line):
         ),
         pytest.param("README.zh-CN.md", "| notices * |", "| notices |", id="default-marker-missing"),
         pytest.param("README.md", "ecosystem.py, external_exec.py,", "ecosystem.py,", id="module-file-missing"),
-        pytest.param("README.md", "18 capability-domain toolsets", "19 capability-domain toolsets", id="group-total"),
-        pytest.param("README.zh-CN.md", "19 个工具模块", "18 个工具模块", id="module-total"),
+        pytest.param("README.md", "19 capability-domain toolsets", "20 capability-domain toolsets", id="group-total"),
+        pytest.param("README.zh-CN.md", "20 个工具模块", "19 个工具模块", id="module-total"),
     ],
 )
 def test_toolset_detail_drift_fails(scratch_repo, name, original, replacement):

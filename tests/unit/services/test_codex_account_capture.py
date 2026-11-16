@@ -17,6 +17,7 @@ from uuid import UUID
 
 import pytest
 
+from aiteam import executables
 from aiteam.services import codex_account_capture as capture
 from aiteam.services.account_monitor import AccountMonitorRunner
 
@@ -314,7 +315,7 @@ def installs(monkeypatch, tmp_path):
     monkeypatch.setattr(capture.sys, "platform", "darwin")
     system_apps, user_apps = tmp_path / "Applications", tmp_path / "user" / "Applications"
     monkeypatch.setattr(capture, "_APPLICATION_DIRS", (str(system_apps), str(user_apps)))
-    monkeypatch.setattr(capture, "_PATH_EXTRA_DIRS", (str(tmp_path / "extra"),))
+    monkeypatch.setattr(executables, "PATH_EXTRA_DIRS", (str(tmp_path / "extra"),))
     monkeypatch.setenv("PATH", str(tmp_path / "path"))
     resources = "ChatGPT.app/Contents/Resources"
     return SimpleNamespace(home=tmp_path / "codex-home", locations={

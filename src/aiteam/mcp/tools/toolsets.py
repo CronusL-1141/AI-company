@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 
 # ============================================================
 # 能力域分组：模块短名 -> toolset 名
@@ -45,6 +46,7 @@ MODULE_TOOLSET: dict[str, str] = {
     "ecosystem": "ecosystem",
     "workflows": "workflows",
     "assets": "assets",
+    "feedback": "feedback",
 }
 
 # 全部合法组名（AITEAM_TOOLSETS=all 展开为此集合）。
@@ -56,6 +58,7 @@ ALL_TOOLSETS: frozenset[str] = frozenset(MODULE_TOOLSET.values())
 # 当前成员工具数：task9 + team2 + memory6 + infra8 + reports3 + notices2 = 30（留 20 头寸）。
 # notices 进 default：用户提示的汇总行让模型调 notice_list，缺了它动作句接不住。
 # assets（工作流备份）不进：登记一次、放行偶发，不是每会话常用；它的提示写明了工具不可用时的退路。
+# feedback（向 OS 维护者反馈）不进：偶发；/os-feedback 写明了工具组被裁掉时的退路。
 # project / agent 等按需以 "default,project" 增量挂载，不进 default 免破顶。
 # ------------------------------------------------------------
 DEFAULT_TOOLSETS: frozenset[str] = frozenset(
@@ -91,6 +94,10 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         # channels（channel_read_ack 走 POST 且真的写水位；channel_unread 是纯读）
         "channel_send",
         "channel_read_ack",
+        # feedback（起草落台账；发布是对外写；account 可删除本机授权；列台账为读）
+        "feedback_draft",
+        "feedback_submit",
+        "feedback_account",
         # ecosystem（scan/apply/tag/claim/pin/mark 等一律写；summary/search/status 为读）
         "ecosystem_scan",
         "ecosystem_scan_periodic",
@@ -205,6 +212,18 @@ def resolve_readonly(raw: str | None) -> bool:
     if raw is None:
         return False
     return raw.strip().lower() in _READONLY_TRUE
+
+
+def tool_registered(module_shortname: str, tool: str, environ: Mapping[str, str]) -> bool:
+    """Whether ``register_all`` in a process with ``environ`` registers ``tool`` of that module.
+
+    The same two settings, read the same way: the toolset switch, then the read-only
+    profile for a write tool. Lets a process that serves sessions (the API, whose HTTP
+    MCP is registered from its own environment) tell whether a tool is on offer.
+    """
+    if not module_enabled(module_shortname, resolve_toolsets(environ.get("AITEAM_TOOLSETS"))):
+        return False
+    return not (tool in WRITE_TOOLS and resolve_readonly(environ.get("AITEAM_READONLY")))
 
 
 def module_enabled(module_shortname: str, enabled_toolsets: set[str]) -> bool:

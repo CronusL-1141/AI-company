@@ -18,4 +18,4 @@ description: 介绍 AI Team OS 能做什么，并按实际安装情况列出可�
 - **没有初始化这一步**：团队由 SubagentStart hook 在第一次派工时自动建。
 - Dashboard 与 API **同端口**，端口在 OS 数据目录的 `api_port.txt`（`aiteam paths` 可查数据目录）。
 - 发版走技能 `/os-release`；跨 harness 给另一个 AI 留言走 `/os-channel`；开会走
-  `/os-meeting` 与技能 meeting-facilitate。
+  `/os-meeting` 与技能 meeting-facilitate；给 OS 维护者报 bug 或提建议走 `/os-feedback`。

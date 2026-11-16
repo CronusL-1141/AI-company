@@ -18,7 +18,8 @@ def _dismiss_registration_notice(cwd: str) -> str:
     import urllib.parse
     import uuid
 
-    from aiteam.mcp.tools.infra import _append_local_record, _caller_host
+    from aiteam.mcp._base import caller_host
+    from aiteam.mcp.tools.infra import _append_local_record
     from aiteam.services.notices.detectors.registration import notice_key, real_dir
 
     key = notice_key(real_dir(cwd))
@@ -35,7 +36,7 @@ def _dismiss_registration_notice(cwd: str) -> str:
         "source": "dismiss_project_registration",
         "key": key,
     }
-    return "queued" if _append_local_record(_caller_host(), record) else "failed"
+    return "queued" if _append_local_record(caller_host(), record) else "failed"
 
 
 def register(mcp):

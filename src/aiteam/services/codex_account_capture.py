@@ -27,7 +27,6 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
 import sys
 from datetime import datetime
 from decimal import Decimal
@@ -37,6 +36,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from aiteam import executables
 from aiteam.clock import from_timestamp, utc_now
 from aiteam.paths import codex_home
 from aiteam.types import PlanUsageSnapshot, PricingAccount, PricingQuotaSnapshot
@@ -47,8 +47,6 @@ _APPLICATION_DIRS = ("/Applications", "~/Applications")
 # execs the CodexCLI.app binary next to it.
 _DESKTOP_LAYOUTS = ("Contents/Resources/codex-cli/bin/codex", "Contents/Resources/codex")
 _STANDALONE_BIN = "packages/standalone/current/bin"
-# Directories a GUI-launched process often lacks on PATH (the set Orca adds).
-_PATH_EXTRA_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin", "~/bin", "~/.nix-profile/bin")
 _CAPTURE_TIMEOUT_SECONDS = 17.0
 _USAGE_TIMEOUT_SECONDS = 3.0
 _STOP_TIMEOUT_SECONDS = 1.0
@@ -64,27 +62,6 @@ class _RequestUnavailableError(CodexAccountCaptureError):
     """A completed non-auth request failure that optional activity may omit."""
 
 
-def _executable_name() -> str:
-    return "codex.exe" if sys.platform == "win32" else "codex"
-
-
-def _is_executable(path: Path) -> bool:
-    # An unreadable location is skipped like a missing one, as PATH lookup does.
-    try:
-        return path.is_file() and os.access(path, os.X_OK)
-    except OSError:
-        return False
-
-
-def _configured_binary(configured: str) -> Path:
-    binary = Path(configured).expanduser()
-    if not configured.strip() or not binary.is_absolute():
-        raise CodexAccountCaptureError(f"{_BINARY_ENV} 必须是明确的可执行文件绝对路径。")
-    if not _is_executable(binary):
-        raise CodexAccountCaptureError(f"{_BINARY_ENV} 指向的文件不存在或不可执行：{binary}")
-    return binary
-
-
 def _install_candidates(home: Path) -> list[Path]:
     """Fixed install locations in lookup order; PATH comes after all of them."""
     candidates = []
@@ -93,34 +70,23 @@ def _install_candidates(home: Path) -> list[Path]:
             Path(apps).expanduser() / "ChatGPT.app" / layout
             for layout in _DESKTOP_LAYOUTS for apps in _APPLICATION_DIRS
         ]
-    candidates.append(home / _STANDALONE_BIN / _executable_name())
+    candidates.append(home / _STANDALONE_BIN / executables.executable_name("codex"))
     return candidates
-
-
-def _search_path() -> str:
-    # Relative entries (including the empty one meaning the working directory)
-    # would make the choice depend on where the API happens to run.
-    entries = os.environ.get("PATH", os.defpath).split(os.pathsep)
-    entries += [os.path.expanduser(extra) for extra in _PATH_EXTRA_DIRS]
-    return os.pathsep.join(entry for entry in entries if os.path.isabs(entry))
 
 
 def _resolve_binary(home: Path) -> Path:
     """The native Codex to start; ``home`` is the Codex home the child will be given."""
-    configured = os.environ.get(_BINARY_ENV)
-    if configured is not None:
-        return _configured_binary(configured)
     candidates = _install_candidates(home)
-    for candidate in candidates:
-        if _is_executable(candidate):
-            return candidate
-    found = shutil.which(_executable_name(), path=_search_path())
+    try:
+        found = executables.find("codex", env_var=_BINARY_ENV, candidates=candidates)
+    except executables.ExecutableConfigError as exc:
+        raise CodexAccountCaptureError(str(exc)) from None
     if found is not None:
-        return Path(found)
+        return found
     tried = "、".join(str(candidate) for candidate in candidates)
     raise CodexAccountCaptureError(
-        f"未检测到 Codex。已查找：{tried}，以及 PATH 和 {'、'.join(_PATH_EXTRA_DIRS)} 中的 "
-        f"{_executable_name()}。请安装 Codex CLI 或 ChatGPT 桌面版，"
+        f"未检测到 Codex。已查找：{tried}，以及 PATH 和 {'、'.join(executables.PATH_EXTRA_DIRS)} 中的 "
+        f"{executables.executable_name('codex')}。请安装 Codex CLI 或 ChatGPT 桌面版，"
         f"或用 {_BINARY_ENV} 指定可执行文件的绝对路径。"
     )
 

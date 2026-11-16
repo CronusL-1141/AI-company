@@ -340,6 +340,7 @@ class _Pick:
     def rank(self) -> tuple:
         return (
             -SEVERITY_RANK[self.entry.severity],
+            self.entry.yields,
             KIND_RANK[self.entry.kind],
             self.notice.first_seen_at,
             self.notice.key,

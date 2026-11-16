@@ -1,5 +1,11 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Idea or feature suggestion
+    url: https://github.com/CronusL-1141/AI-company/discussions/categories/ideas
+    about: New ideas are discussed in Ideas first, before they become issues.
+  - name: Question
+    url: https://github.com/CronusL-1141/AI-company/discussions/categories/q-a
+    about: How to do something, or whether it is meant to work this way.
   - name: Security vulnerability
     url: https://github.com/CronusL-1141/AI-company/security/advisories/new
     about: Please report security issues privately, not as public issues.

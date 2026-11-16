@@ -22,7 +22,6 @@ import psutil
 import pytest
 
 from aiteam.mcp import _base
-from aiteam.mcp.tools import infra
 
 STARTUP_ID = "91ca1de1-162f-47c5-a9e3-1510f4f7a667"  # the id CC started with (MCP env)
 RESUMED_ID = "39c7d5a3-52c6-4735-b866-1fa68229709a"  # the conversation it resumed
@@ -257,11 +256,11 @@ def test_stdio_server_without_cc_env_never_uses_the_registry(monkeypatch, tmp_pa
 
     assert _base._cc_session_id() == ""
     assert _base.resolve_session_id() is None
-    assert infra._caller_host() == "codex"
+    assert _base.caller_host() == "codex"
 
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", STARTUP_ID)
     assert _base._cc_session_id() == RESUMED_ID
-    assert infra._caller_host() == "cc"
+    assert _base.caller_host() == "cc"
 
 
 def test_http_mcp_scope_never_uses_env_or_registry(monkeypatch, tmp_path):

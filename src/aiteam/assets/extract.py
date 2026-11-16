@@ -115,10 +115,14 @@ def redact_url(url: str) -> str:
     return urllib.parse.urlunsplit((parts.scheme, netloc, path, query, parts.fragment and REDACTED))
 
 
+def redact_urls(text: str) -> str:
+    """Every URL in ``text`` through ``redact_url``; the rest of the text as it is."""
+    return _URL.sub(lambda m: redact_url(m.group(0)), text)
+
+
 def redact_text(text: str) -> str:
     """Free text (a shell command, a header line): scheme credentials and URLs redacted."""
-    text = _SCHEME_CREDENTIAL.sub(lambda m: f"{m.group(1)} {REDACTED}", text)
-    return _URL.sub(lambda m: redact_url(m.group(0)), text)
+    return redact_urls(_SCHEME_CREDENTIAL.sub(lambda m: f"{m.group(1)} {REDACTED}", text))
 
 
 def redact_args(args: list) -> list:

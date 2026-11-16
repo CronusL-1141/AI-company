@@ -1,0 +1,29 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask how to do something with AI Team OS, or whether it is meant to work the way it does. If it clearly behaves against its documentation, that is a [bug report](https://github.com/CronusL-1141/AI-company/issues/new?template=bug_report.yml) instead.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What you want to do, or what you want to understand.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: Optional. Commands, tools or settings you already tried, and what they did.
+  - type: input
+    id: version
+    attributes:
+      label: AI Team OS version
+      description: Optional. `/plugin` in Claude Code shows it. For a source install, see `version` in pyproject.toml.
+      placeholder: "1.16.0"
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Optional. The host and its version, the operating system, the CPU architecture.
+      placeholder: "Claude Code 2.1.3, macOS 15.1, arm64"

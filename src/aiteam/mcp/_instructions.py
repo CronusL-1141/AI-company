@@ -25,6 +25,6 @@ INSTRUCTIONS = """AI Team OS —— 多 Agent 团队的持久化治理层。CC �
 - 团队协作: 建队派工、频道广播、多方会议与结构化辩论 → team_status / fleet_dispatch / channel_send / channel_read / meeting_create / meeting_send_message / debate_start
 - 溯源检索: 任务/报告/提交/工作流之间的引用网络与全局搜索 → link_trace / link_query / unified_search
 - 开源生态档案: Claude 生态仓库索引、能力标签、深扫与周报 → ecosystem_search / ecosystem_search_by_capability / ecosystem_repo_get 等 ecosystem_* 全套
-- 其余: workflow_* 追踪 CC Workflow 运行、briefing_* 待办简报、find_skill 查技能、os_health_check 自检。
+- 其余: workflow_* 追踪 CC Workflow 运行、briefing_* 待办简报、find_skill 查技能、os_health_check 自检、feedback_* 向 OS 维护者反馈。
 
 约定: 需要项目/团队 id 时用 context_resolve；研究产出用 report_save 而非直接写文件；用户给出偏好、纠正或设计意图时当场落账：运行期 agent 需要被告知的用 memory_add 写方向层，开发期产品设计写设计文档与任务墙 decision。"""

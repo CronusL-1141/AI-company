@@ -3069,6 +3069,68 @@ class AssetRestorePlanModel(Base):
 
 
 # ============================================================
+# Feedback to the OS maintainers on GitHub (aiteam.feedback)
+# ============================================================
+
+
+class FeedbackSubmissionModel(OriginNodeMixin, Base):
+    """One draft of feedback and what became of it: the record of what was published
+    in the user's name and how the user confirmed it. Never deleted (GitHub cannot
+    give the confirmation back).
+
+    ``claim_hash`` is the content hash while the row holds the claim on publishing
+    that text (sending, sent, unknown), else empty: the partial unique index lets
+    one row per target hold it, across processes and restarts. It is a column of
+    its own, unique where not empty, because that is the form of partial index the
+    center's intake of session rows understands (aiteam.sync.rows): the rows of one
+    text that do not hold it (refused, failed, expired) all travel. A live row the
+    center holds for another node's copy of the same text (a duplicate across
+    machines the marker search missed) is not taken in; it stays on its own node.
+    A refused draft keeps no text: title, fields, body and diagnostics stay empty.
+    """
+
+    __tablename__ = "feedback_submissions"
+    __table_args__ = (
+        Index("uq_feedback_submissions_claim", "target_repo", "claim_hash", unique=True,
+              sqlite_where=text("claim_hash != ''")),
+        Index("ix_feedback_submissions_hash", "target_repo", "content_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_repo: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_ref: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    repository_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    category_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    target_node_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # The cleaned fields the body was rendered from (a prefilled page fills them one by one).
+    fields: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    diagnostics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    language: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    claim_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    route: Mapped[str] = mapped_column(String(8), nullable=False, default="")
+    refusal: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    confirm_method: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    confirmed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    remote_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remote_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    gh_login: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    session_id: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    mcp_session_id: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    author: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utc_now, nullable=False)
+
+
+# ============================================================
 # Multi-host sync bookkeeping (local to each node, never synced; aiteam.sync)
 # ============================================================
 

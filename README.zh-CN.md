@@ -24,7 +24,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 [![MCP](https://img.shields.io/badge/MCP-Protocol-orange)](https://modelcontextprotocol.io)
 [![Stars](https://img.shields.io/github/stars/CronusL-1141/AI-company?style=flat)](https://github.com/CronusL-1141/AI-company)
 
-**122** 个 MCP 工具 · **263** 个 REST 端点 · **25** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **33** 项红线机检不变量
+**126** 个 MCP 工具 · **274** 个 REST 端点 · **25** 个 Dashboard 页面 · **25** 个 Agent 模板 · **42** 个生态研究工具 · **33** 项红线机检不变量
 
 ---
 
@@ -85,7 +85,7 @@ Claude Code 已安装的 Hook 可自动提供启动简报和方向层上下文�
 按客户端选择 MCP 工具面，不必为每次会话加载全部能力。
 
 - **alwaysLoad 动态轮换**：会话启动期用一条 SQL 按 **7 天真实调用频率**重算高频工具白名单（跨天数 ≥2 挡时段性爆发 + 20% 迟滞防抖，硬顶 ≤5），CC 据此对它们豁免 ToolSearch。不叠加、不手调；统计失败静默降级为全 defer，每次名单落台账可审计。
-- **`AITEAM_TOOLSETS` 分组开关**：18 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports/notices（30 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
+- **`AITEAM_TOOLSETS` 分组开关**：19 个能力域 toolset，启动期环境变量决定注册哪些模块。`default` 核心档 = task/team/memory/infra/reports/notices（30 工具，硬顶 ≤50），可 `default,ecosystem` 增量挂载——适配有工具数上限的非 CC 客户端。
 - **`AITEAM_READONLY` 只读档**：与分组正交叠加，按显式清单剔除全部写工具、只留读工具，适合审计 / 观察者会话。
 - **6 个 Claude Code 模板声明最小权限**：会议主持 / 辩论正反方 / 技术文档 / 项目经理 / 技术负责人挂 `disallowedTools`，只列毁灭性 OS 工具（删项目、删团队、重启 API）。Claude Code 2.1.281 对项目级与用户级定义都会强制执行（2026-09-25 实测）；更早的版本可能只把它当声明。Codex 使用自己的原生权限控制，不解释 CC 模板字段。
 
@@ -470,7 +470,7 @@ MCP server 可按客户端暴露完整工具清单或较小的工具集。两个
 
 **`AITEAM_READONLY=1`** - 与分组正交叠加，注册后剔除全部写工具（create/update/delete/apply/send/... 及 `os_restart_api`），只留读工具。适合审计/观察者会话。
 
-18 个分组（带 * 为 default 组）：
+19 个分组（带 * 为 default 组）：
 
 | 组名 | 工具数 | 组名 | 工具数 | 组名 | 工具数 |
 |---|---|---|---|---|---|
@@ -480,6 +480,7 @@ MCP server 可按客户端暴露完整工具清单或较小的工具集。两个
 | infra * | 8 | briefing | 4 | watchdog | 1 |
 | reports * | 3 | analytics | 4 | workflows | 3 |
 | notices * | 2 | ecosystem | 42 | assets | 4 |
+| feedback | 4 | | | | |
 
 ```bash
 # 示例：精简核心 + ecosystem，只读档
@@ -631,7 +632,7 @@ OS 只展示能归属的证据。原生元数据缺失时保持未知，工具�
 ## MCP 工具一览
 
 <details>
-<summary>展开查看工具全景（122 个 MCP 工具，分布在 19 个模块）</summary>
+<summary>展开查看工具全景（126 个 MCP 工具，分布在 20 个模块）</summary>
 
 > 下表为精选摘录——全量清单在 `src/aiteam/mcp/tools/`，由 `scripts/check_readme_numbers.sh` 机器计数校验。
 
@@ -800,6 +801,15 @@ WebSocket 事件后补读，`timeout_read` 是等待到期后的末次补读。�
 | `asset_backup_run` | 立即比对一个已登记的目录，备份有变化的部分 |
 | `asset_scan_resolve` | 用户对一条疑似密钥命中的答复（带原话、留审计）：放行这一版内容，或把文件排除出备份 |
 
+### 向维护者反馈
+
+| 工具 | 说明 |
+|------|------|
+| `feedback_draft` | 为 AI Team OS 维护者起草 bug（GitHub Issue）或建议（Discussions 的 Ideas）：疑似密钥拒发，个人路径与名字改写，私有术语拒发；返回将要发出的原文、相似条目与内容哈希 |
+| `feedback_submit` | 用户在客户端自己的确认框里同意后发布；没有 gh 时，用户在第二个弹框里授权 OS 的 GitHub App（只能动反馈仓库的 issue 与讨论）后发出；没有确认框时，改给预填好的 GitHub 网页，由用户在网页上提交 |
+| `feedback_account` | 反馈走哪条路（用户的 gh 或 OS 的 GitHub App 授权）、以谁的身份；退出 App 授权 |
+| `feedback_list` | 本机发过的反馈：类别、标题、状态、GitHub 编号与链接 |
+
 ### 报告（数据库存储）
 
 | 工具 | 说明 |
@@ -943,7 +953,7 @@ API 地址，支持非默认端口。
 - [x] 25 个专业 Agent 模板（23 基础 + 2 辩论角色），含推荐引擎
 - [x] 四层防线规则体系（37 条规则）+ 行为强制
 - [x] Dashboard 指挥中心（React 19）— 25 个页面，含 `/workflows` 泳道、Workflow 详情、Ecosystem 套件、`/usage` 用量归因、`/usage/accounts` 套餐可用量与模型治理 Settings
-- [x] 122 个 MCP 工具，分布在 19 个模块中
+- [x] 126 个 MCP 工具，分布在 20 个模块中
 - [x] CC Workflow 观测层（自动追踪 + /workflows Dashboard + workflow_list / workflow_get / workflow_reconcile）
 - [x] 知识层——零 LLM 引用图谱 + 三臂 RRF 统一检索（v1.8.0）
 - [x] Claude Code 模型治理：基于 transcript 的发现与启动默认值（v1.8.1）
@@ -995,10 +1005,10 @@ API 地址，支持非默认端口。
 ```
 ai-team-os/
 ├── src/aiteam/
-│   ├── api/           — FastAPI REST 端点（263 条路由）
+│   ├── api/           — FastAPI REST 端点（274 条路由）
 │   ├── mcp/
 │   │   ├── server.py  — MCP 服务器入口
-│   │   └── tools/     — 19 个工具模块（共 122 个 MCP 工具）
+│   │   └── tools/     — 20 个工具模块（共 126 个 MCP 工具）
 │   ├── loop/          — 任务墙引擎 + Watchdog + 已冻结的失败分析
 │   ├── meeting/       — 会议系统
 │   ├── memory/        — 团队记忆

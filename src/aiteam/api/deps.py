@@ -9,7 +9,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import Request
+from fastapi import Depends, Request
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -20,12 +20,15 @@ from aiteam.api.hook_translator import BACKGROUND_DRAIN_TIMEOUT_SECONDS, HookTra
 from aiteam.api.state_reaper import StateReaper
 from aiteam.assets.service import AssetBackup, project_roots
 from aiteam.clock import utc_now
+from aiteam.feedback.auth import AppAuth, default_store
+from aiteam.feedback.service import FeedbackService
 from aiteam.loop.task_wall_engine import TaskWallEngine
 from aiteam.loop.watchdog import WatchdogChecker, WatchdogRunner
 from aiteam.memory.store import MemoryStore
 from aiteam.orchestrator.team_manager import TeamManager
 from aiteam.storage.assets import AssetRepository
 from aiteam.storage.connection import close_db, get_engine
+from aiteam.storage.feedback import FeedbackRepository
 from aiteam.storage.repository import StorageRepository
 from aiteam.sync import context as sync_context
 from aiteam.sync.center import Center
@@ -53,6 +56,7 @@ _watchdog_runner: WatchdogRunner | None = None
 _hook_translator: HookTranslator | None = None
 _task_wall_engine: TaskWallEngine | None = None
 _asset_backup: AssetBackup | None = None
+_feedback_auth: AppAuth | None = None
 
 # Lifespan shutdown gives the workflow backup this long before closing the database.
 # A job cut short loses nothing: the folder's next comparison redoes it (the content
@@ -919,7 +923,7 @@ async def cleanup_dependencies() -> None:
     """Clean up all dependencies (called during lifespan shutdown)."""
     global _repository, _memory_store, _event_bus, _manager, _reaper  # noqa: PLW0603
     global _watchdog_runner, _hook_translator, _task_wall_engine, _asset_backup  # noqa: PLW0603
-    global _sync_node, _center, _edge  # noqa: PLW0603
+    global _sync_node, _center, _edge, _feedback_auth  # noqa: PLW0603
 
     if _asset_backup is not None:
         await _asset_backup.drain(timeout=ASSET_DRAIN_TIMEOUT_SECONDS)
@@ -962,6 +966,7 @@ async def cleanup_dependencies() -> None:
     _hook_translator = None
     _task_wall_engine = None
     _asset_backup = None
+    _feedback_auth = None
 
 
 def get_sync_node() -> NodeStatus:
@@ -1131,6 +1136,40 @@ def get_asset_backup() -> AssetBackup:
 def asset_backup_if_started() -> AssetBackup | None:
     """The workflow backup, or None before startup (the hook route only notes events to it)."""
     return _asset_backup
+
+
+def _db_folder(repo: StorageRepository) -> Path:
+    """The folder of the request's database: where feedback keeps its files (like the backup's store)."""
+    from sqlalchemy.engine import make_url
+
+    from aiteam.storage.connection import default_db_path
+
+    database = make_url(repo.db_url).database
+    return Path(database).parent if database else default_db_path().parent
+
+
+def get_feedback_auth(repo: StorageRepository = Depends(get_repository)) -> AppAuth:
+    """OS's GitHub App authorization for feedback: one per process (its device flows live in
+    memory, and its lock keeps two requests from spending one refresh token)."""
+    global _feedback_auth  # noqa: PLW0603 - one process, one authorization state
+    if _feedback_auth is None:
+        _feedback_auth = AppAuth(default_store(_db_folder(repo)))
+    return _feedback_auth
+
+
+def get_feedback_service(repo: StorageRepository = Depends(get_repository),
+                         bus: EventBus = Depends(get_event_bus),
+                         auth: AppAuth = Depends(get_feedback_auth)) -> FeedbackService:
+    """Feedback on GitHub (aiteam.feedback), over the request's repository and event bus.
+
+    Built per request from them, so a test that replaces them replaces this too.
+    """
+
+    async def projects() -> list[tuple[str, str]]:
+        return [(project.name, project.root_path or "") for project in await repo.list_projects()]
+
+    return FeedbackService(FeedbackRepository(repo.db_url), projects=projects, emit=bus.emit,
+                           data_dir=_db_folder(repo), auth=auth)
 
 
 def get_reaper() -> StateReaper | None:

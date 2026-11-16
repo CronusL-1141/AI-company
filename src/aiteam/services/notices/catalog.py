@@ -80,6 +80,10 @@ class CatalogEntry:
     # out, once per key and session, framed as not shown; the line budget only
     # limits what the user sees.
     tell_model_when_held: bool = False
+    # An introduction that can wait: within its severity it comes after every
+    # other line, so it never takes the line budget from news such as a release.
+    # Held back, it stays pending and is said at a later start.
+    yields: bool = False
 
     @property
     def color(self) -> NoticeColor:
@@ -1004,6 +1008,27 @@ CATALOG_ENTRIES: tuple[CatalogEntry, ...] = (
                 "first, add --apply once the user agrees). Do not rewrite node.json yourself.",
             ),
         },
+    ),
+    # E32: feedback to the OS maintainers can be given from a session (aiteam.feedback).
+    # Said once per host, at the first fresh session start (not a resume, clear or
+    # compact) where this API process registers the feedback tools (not under
+    # AITEAM_TOOLSETS=default or the read-only profile). "act": the model is to offer
+    # it whenever the user brings up an OS bug or wish. The user lines are the
+    # maintainer's wording shortened to the 160-column limit.
+    CatalogEntry(
+        id="feedback_intro",
+        kind=NoticeKind.STATUS, severity=NoticeSeverity.INFO,
+        hosts=frozenset({"cc", "codex"}), render_at=frozenset({"session_start"}),
+        dedup="once", clear="auto", params={}, per_host=True, frame="act",
+        start_sources=frozenset({"startup"}), yields=True,
+        variants={"": _t(
+            "对 AI Team OS 有问题或建议，直接跟我说就行。我整理好给你过目，你确认后自动提交到 GitHub："
+            "问题发成 Issue，建议发到讨论区，已有人提过的追加到原帖下。",
+            "An AI Team OS problem or idea? Just tell me. I draft it for you to check; once you confirm it goes "
+            "to GitHub as an Issue, Discussion or reply.",
+            "用户提到 OS 的 bug 或需求时，主动提出帮他走 feedback_draft。",
+            "When the user mentions an OS bug or something they want from OS, offer to file it with feedback_draft.",
+        )},
     ),
 )
 

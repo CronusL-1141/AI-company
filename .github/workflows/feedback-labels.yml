@@ -1,0 +1,25 @@
+name: Feedback labels
+
+# A bug report filed by the AI Team OS feedback tool carries a hidden marker naming
+# the issue form its sections follow. GitHub drops the labels a person without push
+# access sends through the API, so the form's own bug label is added here instead,
+# the same label a report filed through the web form gets.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label-bug-report:
+    if: contains(github.event.issue.body, '<!-- aiteam-feedback:v1 form=bug_report ')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the bug label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: gh issue edit "$NUMBER" --repo "$REPO" --add-label bug

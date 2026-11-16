@@ -19,6 +19,7 @@ from aiteam.mcp.tools import (
     channels,
     ecosystem,
     external_exec,
+    feedback,
     infra,
     links,
     meeting,
@@ -66,6 +67,7 @@ _MODULES = [
     workflows,
     external_exec,
     assets,
+    feedback,
 ]
 
 

@@ -39,6 +39,10 @@ SESSION_TABLES = frozenset({
     "account_usage_batches",
     "account_plan_snapshots",
     "account_plan_price_snapshots",
+    # What this node's sessions filed on GitHub and how the user confirmed it: written
+    # where the gh login is, mirrored to the center (a second copy of a record that
+    # cannot be rebuilt), never routed through it (filing must not wait for the center).
+    "feedback_submissions",
 })
 
 SHARED_TABLES = frozenset({

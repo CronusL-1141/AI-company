@@ -16,6 +16,7 @@ from aiteam.api.routes.decisions import router as decisions_router
 from aiteam.api.routes.ecosystem import router as ecosystem_router
 from aiteam.api.routes.events import router as events_router
 from aiteam.api.routes.external_exec import router as external_exec_router
+from aiteam.api.routes.feedback import router as feedback_router
 from aiteam.api.routes.fleet import router as fleet_router
 from aiteam.api.routes.health import router as health_router
 from aiteam.api.routes.hooks import router as hooks_router
@@ -73,6 +74,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     router_agents_memory,
     hooks_router,
     assets_router,
+    feedback_router,
     task_wall_router,
     system_router,
     analytics_router,
