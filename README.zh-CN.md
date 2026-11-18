@@ -13,7 +13,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 
 <!-- 上方 Codex 兼容说明跨版本保留。每次发版时，用该版本已核验的摘要整体替换当前公告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
 
-> ⚡ **v1.17.0 — 反馈直达 GitHub，两台机器可选共用一份记录。** 把 AI Team OS 的问题或想法告诉助手：它起草 bug 报告（发成 Issue）或想法（发到 Discussions），去掉隐私细节，你在客户端自己的确认框里点 Accept 后才发出。多机同步默认关闭，开启后中心与边缘两台机器共享项目、任务、记忆与报告，离线期间的写入事后补发。登记 Claude Code 配置目录后，你在里面写的指令、skill 等文件会逐版本备份在本机。`channel_wait` 单次调用最长可挂两小时。hook 授信不变；更新后重启 API 并重开所有会话，详见更新日志。
+> ⚡ **v1.17.1 — 修好 Homebrew 与 Debian/Ubuntu 系统 Python 上的源码安装。** 在带 PEP 668 外部管理标记的 Python 上，以前的 `python3 install.py` 没装上 `aiteam` 包也会报告安装完成，MCP 服务因此起不来。现在安装器会越过这一拒绝自动重试，并按 MCP 服务的加载方式核对包；更新时也会刷新 pip 的安装记录与 `aiteam` 命令。除此之外与 v1.17.0 相同（反馈直达 GitHub、可选的多机同步），详见更新日志。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 

@@ -3,6 +3,39 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.17.1] - 2026-11-18
+
+一个 **patch** 版本，修复在带外部管理标记（PEP 668）的 Python 上安装与更新的问题，涉及 Homebrew Python，以及 Debian 12+ 与 Ubuntu 23.04+ 的系统 Python。在这类解释器上，全新运行 `python3 install.py` 只装上了依赖，`aiteam` 包本身没装，却仍打印「Installation complete!」并以 0 退出；随后 MCP 服务启动失败（`No module named 'aiteam'`），API 也就一直起不来。在这类解释器上更新，pip 对这个包的安装记录、连同 `aiteam` 命令，都停在最初安装的版本；Codex 适配器的 `upgrade` 则停在它的 `pip install -e .` 那一步。之所以定为 patch，是因为改动只在安装器、更新脚本与 Codex 适配器的 upgrade 上，API、MCP 工具、hook 与数据库都与 1.17.0 相同。**hook 与 Codex hook 授信都没有变，不需要重新授信**（见升级说明）。
+
+### 修复
+
+- **在 PEP 668 的 Python 上全新安装**：pip 以「外部管理的环境」为由拒绝 `pip install -e .` 时，安装器会加 `--break-system-packages` 重试一次，与它补装缺失依赖时的做法一样。包会装进 OS 运行所用的 Python：OS 的所有进程共用系统 Python，按设计不用虚拟环境。不是 PEP 668 的失败不重试，并打印 pip 输出的最后一行。
+- **安装器按 MCP 服务的加载方式核对包**：在新起的解释器里、工作目录在仓库外、不带 `PYTHONPATH`，`aiteam` 必须能从本仓库的 `src/` 导入，pip 记录的版本也必须是本仓库的版本。否则就从本仓库重装；重装后仍不行，就打印要手动执行的命令。每次更新都会做同样的核对。
+- **更新会刷新 pip 的安装记录与 `aiteam` 命令**：安装记录停在旧版本的可编辑安装虽然也会加载新代码，但 `aiteam` 命令以及 `[project.scripts]` 里的其他入口都停在最初安装时的样子；现在会重装。旧版本的更新脚本拉取新代码后，会调用新安装器里的这项核对，所以从 1.17.0 或更早版本更新时就能修好。
+- **去掉更新脚本里那句误导的警告**：`install.py --update` 不再让你「仅在依赖有变时」自己重跑 pip，而是核对包与每一项声明的依赖，缺什么补什么。
+- **Codex 适配器的 `upgrade` 能越过 PEP 668**：它改为运行 `install.py --package`，不再直接运行 `pip install -e .`，所以拒绝会被重试，并且在运行 `update` 之前核对包。
+
+### 行为变化
+
+- **必需项核对失败时，`python3 install.py` 以退出码 1 结束**，并打印「Installation incomplete」，不再打印「Installation complete!」。运行安装器、依赖退出码 0 的脚本现在会看到这个失败。
+
+### 变更
+
+- **`install.py --package`**：只安装本仓库的 `aiteam` 包及其依赖，并证明它们能导入，不碰任何 Claude Code 配置。Codex 适配器的 `upgrade` 用的就是它。
+- **依赖只从 `pyproject.toml` 读取**：删掉安装器里手写的回退依赖清单（它已经比声明少了四个包）；缺失的依赖按 `pyproject.toml` 的声明安装。
+- **在 PEP 668 的 Python 上做发版检查**：`scripts/check_pep668_lifecycle.py` 在 Ubuntu 24.04 容器里，以普通用户身份、用系统 `python3`，全新安装一次，再用上一版自带的更新脚本从上一版更新一次。每条路径都要求：安装器退出码为 0，pip 记录的是新版本，按登记的命令启动 MCP 服务能列出工具，它拉起的 API 报新版本号。它已列入发版清单，运行时需要在跑的 Docker 守护进程。
+
+### 升级说明
+
+- **Claude Code 源码安装**：在安装所用的仓库里、`master` 分支上，运行 `git pull --ff-only`，再运行 `python3 install.py --update`。在 PEP 668 的 Python 上，1.17.0 的更新脚本会最后一次打印它原来那句 pip 警告；紧接着的几行会从本仓库重装包，并以 `[OK]` 结尾。如果之前的全新安装导致 MCP 服务起不来，运行 `git pull --ff-only` 后再运行 `python3 install.py` 即可修好。
+- **Codex 适配器**：你这次运行的 `upgrade` 仍是 1.17.0 的版本，所以在 PEP 668 的 Python 上，这一次它还会停在 `pip install -e .`。请改为在安装所用的仓库里、`master` 分支上依次运行：`git pull --ff-only`、`python3 install.py --package`、`python3 scripts/codex_adapter.py update`。其他解释器上照常运行 `python3 scripts/codex_adapter.py upgrade` 即可。
+- **Claude Code 插件**：按 1.17.0 的方式更新（`claude plugin marketplace update ai-team-os`，然后 `claude plugin update ai-team-os@ai-team-os`，再重启 Claude Code 两次）。
+- **别的不用做**：API 与 MCP 服务的代码没有变，重启它们只会让 `/api/health` 报出 1.17.1。hook、`hooks.json` 与 `hook-trust.lock` 都与 1.17.0 相同，数据库也不会被改动。
+
+### 已知限制
+
+- **插件首次启动时的自动安装**碰到 PEP 668 拒绝仍然只会报告，并给出要手动执行的命令，不会重试，因为那一步不是你主动要求的安装。`aiteam` 包导入不了时，SessionStart 的提示仍可能说服务正在启动。
+
 ## [1.17.0] - 2026-11-18
 
 一个 **minor** 版本。两台机器现在可以共用一份 AI Team OS 记录：可选的多机同步默认关闭，开启后一台机器做中心、另一台做边缘，在任一台上写下的项目、任务、memo、记忆、报告、频道、会议与简报两台都能看到，链路断开期间的写入在恢复后补发。对 AI Team OS 的反馈可以从会话直达 GitHub，只有你在客户端自己的确认框里点了 Accept 才会发出。登记 Claude Code 配置目录之后，你在里面写的指令、记忆、skill 等文件会逐版本备份在本机。`channel_wait` 单次调用最长可以挂两小时。之所以定为 minor 而不是 patch，是因为这些都是新功能：多机同步及其 `python3 -m aiteam.sync` 命令、反馈直达 GitHub（四个 MCP 工具与 `/os-feedback`）、工作流资产备份（四个 MCP 工具与一个 Dashboard 页面），以及三条提示（E30-E32）。**部分行为有变化（见行为变化）。hook 与 Codex hook 授信都没有变化，不需要重新授信；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话**（见升级说明）。

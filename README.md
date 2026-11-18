@@ -13,7 +13,7 @@ AI Team OS is a shared operating layer for **Claude Code and Codex**. Keep tasks
 
 <!-- Keep the Codex compatibility note above across releases. For each release, replace the current-release announcement with that version's verified summary. Keep historical details in CHANGELOG.md. -->
 
-> ⚡ **v1.17.0 - Send feedback straight to GitHub, and optionally share one record across two machines.** Tell your assistant about an AI Team OS problem or idea: it drafts a bug report (an Issue) or an idea (in Discussions), cleans private details out, and posts only after you Accept in your client's own dialog. Multi-host sync, off by default, lets a center and an edge machine share projects, tasks, memories and reports, with offline writes replayed later. Enroll your Claude Code config folder and the instructions, skills and other files you wrote there are backed up locally, version by version. `channel_wait` can hold one call for up to two hours. Hook trust is unchanged; after updating, restart the API and reopen every session; see the changelog.
+> ⚡ **v1.17.1 - Source install fixed on Homebrew and Debian/Ubuntu system Python.** On a Python marked as externally managed (PEP 668), a fresh `python3 install.py` used to report success without installing the `aiteam` package, so the MCP server could not start. The installer now retries past the refusal and checks the package the way the MCP server loads it; updates also refresh pip's record and the `aiteam` command. Nothing else changed since v1.17.0, which brought feedback straight to GitHub and opt-in multi-host sync; see the changelog.
 >
 > Full version history: [CHANGELOG.md](CHANGELOG.md)
 

@@ -3,6 +3,39 @@
 All notable changes to AI Team OS will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.17.1] - 2026-11-18
+
+A **patch** release that fixes installing and updating on a Python marked as externally managed (PEP 668): Homebrew Python, and the system Python of Debian 12+ and Ubuntu 23.04+. On those interpreters a fresh `python3 install.py` installed the dependencies but not the `aiteam` package itself, still printed "Installation complete!" and exited 0; the MCP server then failed to start (`No module named 'aiteam'`), so the API never came up. Updates there left pip's record of the package, and with it the `aiteam` command, at the version first installed, and the Codex adapter's `upgrade` stopped at its `pip install -e .` step. Patch because only the installer, the updater and the Codex adapter's upgrade change; the API, MCP tools, hooks and database are as in 1.17.0. **Hooks and Codex hook trust are unchanged, so nothing needs approving again** (see Upgrade notes).
+
+### Fixed
+
+- **Fresh install on a PEP 668 Python**: when pip refuses `pip install -e .` because the environment is externally managed, the installer retries once with `--break-system-packages`, as it already did for missing dependencies. The package goes into the Python that OS runs on, since all OS processes share the system Python and OS deliberately uses no virtual environment. A failure that is not PEP 668 is not retried, and pip's last output line is printed.
+- **The installer checks the package the way the MCP server loads it**: in a new interpreter, outside the checkout and without `PYTHONPATH`, `aiteam` must import from this checkout's `src/`, and pip must record this checkout's version. Otherwise it reinstalls from the checkout, and if that still fails it prints the command to run by hand. The same check runs on every update.
+- **Updates bring pip's record and the `aiteam` command up to date**: an editable install recorded at an older version still loaded the new code, but the `aiteam` command and any other `[project.scripts]` entry stayed as first installed; it is now reinstalled. The updater of an earlier release calls this check from the installer it has just pulled, so updating from 1.17.0 or earlier already gets the fix.
+- **The updater's misleading warning is gone**: `install.py --update` no longer says to re-run pip yourself "only if dependencies changed"; it checks the package and every declared dependency and repairs what is missing.
+- **The Codex adapter's `upgrade` gets past PEP 668**: it runs `install.py --package` instead of a plain `pip install -e .`, so the refusal is retried and the package is checked before `update` runs.
+
+### Behavior changes
+
+- **`python3 install.py` exits 1 when a required check fails**, and prints "Installation incomplete" instead of "Installation complete!". A script that ran the installer and relied on exit code 0 now sees the failure.
+
+### Changed
+
+- **`install.py --package`**: installs only this checkout's `aiteam` package and its dependencies and proves they import, without touching any Claude Code configuration. The Codex adapter's `upgrade` uses it.
+- **Dependencies come from `pyproject.toml` only**: the installer's hand-written fallback list of dependencies, which had fallen four packages behind, is removed; missing dependencies are installed from what `pyproject.toml` declares.
+- **Release check on a PEP 668 Python**: `scripts/check_pep668_lifecycle.py` runs a fresh install, and an update from the previous release using that release's own updater, in an Ubuntu 24.04 container with its system `python3` and a normal user. For each it requires that the installer exits 0, pip records the new version, the MCP server starts from the registered command and lists its tools, and the API it starts reports the new version. It is part of the release checklist and needs a running Docker daemon.
+
+### Upgrade notes
+
+- **Claude Code source install**: in the install checkout, on `master`, run `git pull --ff-only`, then `python3 install.py --update`. On a PEP 668 Python the 1.17.0 updater prints its old pip warning one last time; the lines after it reinstall the package from the checkout and end with `[OK]`. If a fresh install left your MCP server unable to start, `git pull --ff-only` followed by `python3 install.py` fixes it.
+- **Codex adapter**: the `upgrade` you run is still 1.17.0's, so on a PEP 668 Python it stops at `pip install -e .` this one time. Run instead, in the install checkout on `master`: `git pull --ff-only`, then `python3 install.py --package`, then `python3 scripts/codex_adapter.py update`. On other interpreters `python3 scripts/codex_adapter.py upgrade` works as before.
+- **Claude Code plugin**: update as for 1.17.0 (`claude plugin marketplace update ai-team-os`, then `claude plugin update ai-team-os@ai-team-os`, and restart Claude Code twice).
+- **Nothing else to do**: the API and MCP server code is unchanged, so restarting them only makes `/api/health` report 1.17.1. Hooks, `hooks.json` and `hook-trust.lock` are as in 1.17.0, and the database is not touched.
+
+### Known limitations
+
+- **The plugin's first-start install** still only reports a PEP 668 refusal, with the command to run by hand, instead of retrying, since it runs without you having asked for an install. The SessionStart notice can still say the service is starting when the `aiteam` package cannot be imported.
+
 ## [1.17.0] - 2026-11-18
 
 A **minor** release. Two machines can now share one AI Team OS record: an opt-in multi-host sync, off by default, makes one machine the center and another an edge, so projects, tasks, memos, memories, reports, channels, meetings and briefings written on either machine are seen on both, and writes made while the link is down are replayed when it returns. Feedback on AI Team OS goes from a session straight to GitHub, and is published only when you accept it in your client's own dialog. Once you enroll your Claude Code config folder, the instructions, memory, skills and other files you wrote there are backed up locally, version by version. `channel_wait` can hold a single call for up to two hours. Minor rather than patch because these are new features: multi-host sync with its `python3 -m aiteam.sync` commands, feedback to GitHub with four MCP tools and `/os-feedback`, workflow asset backup with four MCP tools and a Dashboard page, and three notices (E30-E32). **Some behavior changed (see Behavior changes). Hooks and Codex hook trust are unchanged, so nothing needs approving again; after updating, restart the API and every open Claude Code and Codex session** (see Upgrade notes).
