@@ -769,14 +769,17 @@ def upgrade(repo_root: Path, codex_home: Path, interpreter: Path | None = None, 
     if options["runtime_dir"]:
         arguments.extend(["--runtime-dir", str(options["runtime_dir"])])
     script = repo_root / "scripts/codex_adapter.py"
+    # install.py --package: pip install -e . retried past PEP 668 (Homebrew and
+    # Debian/Ubuntu system Python refuse a plain one), then the import checks.
+    package = [str(python), str(repo_root / "install.py"), "--package"]
     commands = [
         ["git", "-C", str(repo_root), "pull", "--ff-only"],
-        [str(python), "-m", "pip", "install", "-e", "."],
+        package,
         [str(python), str(script), "update", *arguments],
         [str(python), str(script), "status", *arguments],
     ]
     for command in commands:
-        if command[1:3] == ["-m", "pip"]:
+        if command is package:
             # A pull hook or another session may have switched the checkout.
             # Recheck before pinning the editable package to any source tree.
             _check_upgrade_source(repo_root, codex_home, python)

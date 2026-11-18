@@ -429,7 +429,7 @@ def test_upgrade_orders_stub_commands_and_preserves_receipt(adapter, repo, tmp_p
     assert adapter.upgrade(repo, home) == 0
     writes = [command for command in commands if not _is_git_read(command)]
     assert writes[0] == ["git", "-C", str(repo), "pull", "--ff-only"]
-    assert writes[1] == [str(python), "-m", "pip", "install", "-e", "."]
+    assert writes[1] == [str(python), str(repo / "install.py"), "--package"]
     assert [command[2] for command in writes[2:]] == ["update", "status"]
     for command in writes[2:]:
         assert command[:2] == [str(python), str(repo / "scripts/codex_adapter.py")]
@@ -450,7 +450,7 @@ def test_upgrade_stops_on_first_failure(adapter, repo, tmp_path, monkeypatch, fa
     def controlled(command, **kwargs):
         if _is_git_read(command):
             return original(command, **kwargs)
-        step = "pull" if "pull" in command else "pip" if "pip" in command else command[2]
+        step = "pull" if "pull" in command else "pip" if "--package" in command else command[2]
         steps.append(step)
         if step == fail_step:
             raise subprocess.CalledProcessError(1, command)
@@ -566,7 +566,7 @@ def test_upgrade_allows_only_recorded_branch_or_master(adapter, repo, tmp_path, 
     monkeypatch.setattr(adapter.subprocess, "run", controlled)
     assert adapter.upgrade(repo, home) == 0
     assert len(mutations) == 4
-    assert mutations[1][1:5] == ["-m", "pip", "install", "-e"]
+    assert mutations[1][1:] == [str(repo / "install.py"), "--package"]
 
 
 def test_upgrade_rechecks_branch_after_pull_before_pip(adapter, repo, tmp_path, monkeypatch):

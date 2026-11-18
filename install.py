@@ -1106,6 +1106,7 @@ def main():
             "  python install.py --update   # update existing installation\n"
             "  python install.py --config-dir ~/.other-claude  # install into another config folder\n"
             "  python install.py --force-mcp  # register global MCP even with the plugin enabled\n"
+            "  python install.py --package    # only the aiteam package and its dependencies\n"
         ),
     )
     parser.add_argument(
@@ -1132,6 +1133,12 @@ def main():
         help="With --update: leave the OS data directory where it is (no migration this time)",
     )
     parser.add_argument(
+        "--package",
+        action="store_true",
+        help=("Only install this checkout's aiteam package and its dependencies, then prove they import "
+              "(a PEP 668 refusal is retried); touches no Claude Code config. The Codex adapter's upgrade uses it"),
+    )
+    parser.add_argument(
         "--offline",
         action="store_true",
         help="With --update: do not pull code or install packages; refresh from this checkout as it is",
@@ -1139,6 +1146,10 @@ def main():
     args = parser.parse_args()
     if (args.no_migrate_data or args.offline) and not args.update:
         parser.error("--no-migrate-data and --offline go with --update")
+    if args.package:
+        if args.update or args.config_dir or args.force_mcp:
+            parser.error("--package goes alone")
+        sys.exit(0 if install_python_package(Path(__file__).resolve().parent) else 1)
     apply_config_dir(args.config_dir)
 
     if args.update:

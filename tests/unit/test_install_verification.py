@@ -121,3 +121,23 @@ def test_next_steps_direct_users_to_mcp_autostart():
     assert "uvicorn" not in next_steps
     assert "aiteam up" not in next_steps
     assert "/os-up" not in next_steps, "/os-up starts services; it does not create a team"
+
+
+@pytest.mark.parametrize("healthy, code", [(True, 0), (False, 1)], ids=["installed", "still-broken"])
+def test_package_flag_runs_only_the_package_step(install_mod, monkeypatch, healthy, code):
+    """install.py --package (the Codex adapter's upgrade) installs the package and touches no config."""
+    calls = []
+    monkeypatch.setattr(install_mod, "install_python_package", lambda root: calls.append(root) or healthy)
+    monkeypatch.setattr(install_mod, "register_hooks", lambda root: pytest.fail("--package touched hooks"))
+    monkeypatch.setattr(sys, "argv", ["install.py", "--package"])
+    with pytest.raises(SystemExit) as exited:
+        install_mod.main()
+    assert exited.value.code == code
+    assert calls == [INSTALLER.parent]
+
+
+def test_package_flag_goes_alone(install_mod, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["install.py", "--package", "--update"])
+    with pytest.raises(SystemExit) as exited:
+        install_mod.main()
+    assert exited.value.code == 2
