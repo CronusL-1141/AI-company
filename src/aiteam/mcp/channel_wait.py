@@ -18,6 +18,9 @@ from aiteam.clock import ensure_utc
 
 _CHANNEL = re.compile(r"(?:team:[a-zA-Z0-9_\-]+|project:[a-zA-Z0-9_\-]+|global)\Z")
 _ROLE = re.compile(r"[a-zA-Z0-9_\-]{1,100}\Z")
+# One idle hold of up to two hours costs a single tool call instead of a model
+# wake-up every few minutes; the client tool timeout must still exceed it.
+MAX_WAIT_SECONDS = 7200
 
 
 async def wait_for_channel(
@@ -48,8 +51,10 @@ async def wait_for_channel(
             raise ValueError("reader and sender must be distinct role identifiers")
         if not project_id.strip():
             raise ValueError("project_id is required")
-        if not 0 < timeout_seconds <= 300 or not 1 <= limit <= 200:
-            raise ValueError("timeout_seconds must be in (0, 300]; limit must be in [1, 200]")
+        if not 0 < timeout_seconds <= MAX_WAIT_SECONDS or not 1 <= limit <= 200:
+            raise ValueError(
+                f"timeout_seconds must be in (0, {MAX_WAIT_SECONDS}]; limit must be in [1, 200]"
+            )
         if not 0 < io_timeout_seconds <= 60:
             raise ValueError("io_timeout_seconds must be in (0, 60]")
         if not since and not cursor:

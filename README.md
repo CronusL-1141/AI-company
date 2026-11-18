@@ -706,7 +706,7 @@ See [the external execution guide](src/aiteam/data/USAGE.external-exec.md).
 project/reader/sender-scoped inbox, then returns persisted message bodies on an
 event. It does not schedule model turns or start a daemon. A completed Desktop
 turn cannot be restarted by this tool. The default wait is 45 seconds (maximum
-300). `io_timeout_seconds` independently budgets connection, subscription ACK,
+7200, so an idle session can hold one call for up to two hours). `io_timeout_seconds` independently budgets connection, subscription ACK,
 and each HTTP read (default 10 seconds, maximum 60). Set the client request
 timeout above `timeout_seconds + 4 * io_timeout_seconds + 5`.
 A client must send MCP cancellation or close the session to cancel

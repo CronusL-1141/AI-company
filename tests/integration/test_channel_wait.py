@@ -376,9 +376,17 @@ async def test_expired_cursor_is_reported_without_advancing(live_channels):
     assert result["_error_category"] == "channel_wait_cursor_expired"
 
 
+async def test_longest_wait_is_accepted(live_channels):
+    client, http, _, _, _ = live_channels
+    await send(http)
+    result = await call_wait(client, timeout_seconds=7200)
+    assert result["success"] is True
+    assert result["data"]["delivery_source"] == "replay"
+
+
 @pytest.mark.parametrize("overrides", [
     {"project_id": " "}, {"reader": "receiver!"}, {"sender": "receiver"},
-    {"since": "bad-time"}, {"timeout_seconds": 0}, {"timeout_seconds": 301}, {"limit": 201},
+    {"since": "bad-time"}, {"timeout_seconds": 0}, {"timeout_seconds": 7200.5}, {"limit": 201},
     {"io_timeout_seconds": 0}, {"io_timeout_seconds": 61},
 ])
 async def test_invalid_input_fails_before_connecting(live_channels, overrides):

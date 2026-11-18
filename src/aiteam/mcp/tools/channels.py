@@ -48,7 +48,8 @@ def register(mcp):
             since: 首次调用的 ISO 8601 时间下界；与 cursor 至少传一个，续读使用 cursor。
             project_id: 项目 id；留空按既有 cwd 规则解析，解析不到则拒绝。
             cursor: 上次实际处理页的 next_cursor；按数据库插入序续读，不用时间戳替代。
-            timeout_seconds: 等待新消息的秒数，范围 (0, 300]，默认 45；不含连接与补读开销。
+            timeout_seconds: 等待新消息的秒数，范围 (0, 7200]，默认 45；不含连接与补读开销。
+                空闲长挂前确认客户端工具超时足够（Codex 为 tool_timeout_sec）。
             limit: 最多返回的消息数，范围 1-200，默认 50。
             io_timeout_seconds: 连接、订阅确认和单次 HTTP 读取各自的秒数预算，范围 (0, 60]，默认 10。
 
