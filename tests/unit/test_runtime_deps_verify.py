@@ -13,6 +13,8 @@ PEP 668 被拒后会自动改用 --break-system-packages 重试。
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -58,10 +60,21 @@ class TestDeclaredDependencies:
         assert install.declared_dependencies(tmp_path) == []
 
 
+@pytest.fixture()
+def package_ok(monkeypatch: pytest.MonkeyPatch):
+    """The aiteam package check passes, so these cases see only the dependency check.
+
+    Without it the real probe runs, and in a worktree it finds the main checkout's
+    package and asks pip to reinstall from the worktree.
+    """
+    monkeypatch.setattr(install, "package_problem", lambda root: None)
+
+
+@pytest.mark.usefixtures("package_ok")
 class TestVerifyRuntimeDependencies:
     def test_all_present_installs_nothing(self, monkeypatch: pytest.MonkeyPatch):
         calls: list[list[str]] = []
-        monkeypatch.setattr(install, "_pip_install_specs", lambda specs, root: calls.append(specs))
+        monkeypatch.setattr(install, "pip_install", lambda specs, root: calls.append(specs))
         missing = install.verify_runtime_dependencies(PROJECT_ROOT)
         # 本进程正在跑测试，说明依赖俱在
         assert missing == []
@@ -79,7 +92,7 @@ class TestVerifyRuntimeDependencies:
             attempted.append(list(specs))
             return False  # 装不上，模拟离线/无权限
 
-        monkeypatch.setattr(install, "_pip_install_specs", fake_install)
+        monkeypatch.setattr(install, "pip_install", fake_install)
         missing = install.verify_runtime_dependencies(PROJECT_ROOT)
         assert attempted == [["ghost>=1.0"]]
         # 装不上要如实报回缺哪个，不能吞掉
@@ -96,7 +109,7 @@ class TestVerifyRuntimeDependencies:
         monkeypatch.setattr(
             install, "declared_dependencies", lambda root: [("no_such_module_xyz", "ghost>=1.0")]
         )
-        monkeypatch.setattr(install, "_pip_install_specs", lambda specs, root: False)
+        monkeypatch.setattr(install, "pip_install", lambda specs, root: False)
         install.verify_runtime_dependencies(PROJECT_ROOT)
         printed = capsys.readouterr().out
         assert '"ghost>=1.0"' in printed
@@ -115,12 +128,12 @@ class TestVerifyRuntimeDependencies:
             return len(seen) > 1
 
         monkeypatch.setattr(install, "_importable", fake_importable)
-        monkeypatch.setattr(install, "_pip_install_specs", lambda specs, root: True)
+        monkeypatch.setattr(install, "pip_install", lambda specs, root: True)
         assert install.verify_runtime_dependencies(PROJECT_ROOT) == []
         assert len(seen) == 2
 
 
-class TestPipInstallSpecsPep668:
+class TestPipInstallPep668:
     """PEP 668 被拒后自动改用 --break-system-packages 重试。
 
     不重试就等于：Homebrew / 系统 Python 的用户永远装不上新依赖，而这正是本仓
@@ -143,7 +156,7 @@ class TestPipInstallSpecsPep668:
             monkeypatch,
             [(1, "error: externally-managed-environment"), (0, "Successfully installed ghost")],
         )
-        assert install._pip_install_specs(["ghost>=1.0"], PROJECT_ROOT) is True
+        assert install.pip_install(["ghost>=1.0"], PROJECT_ROOT) is True
         assert len(calls) == 2
         assert "--break-system-packages" not in calls[0]
         assert "--break-system-packages" in calls[1]
@@ -151,11 +164,79 @@ class TestPipInstallSpecsPep668:
     def test_no_retry_on_unrelated_failure(self, monkeypatch: pytest.MonkeyPatch):
         """非 PEP 668 的失败不重试——重试治不了网络不通，只会多等一轮。"""
         calls = self._fake_runner(monkeypatch, [(1, "Could not find a version that satisfies")])
-        assert install._pip_install_specs(["ghost>=1.0"], PROJECT_ROOT) is False
+        assert install.pip_install(["ghost>=1.0"], PROJECT_ROOT) is False
         assert len(calls) == 1
 
     def test_success_first_try_does_not_retry(self, monkeypatch: pytest.MonkeyPatch):
         calls = self._fake_runner(monkeypatch, [(0, "Successfully installed ghost")])
-        assert install._pip_install_specs(["ghost>=1.0"], PROJECT_ROOT) is True
+        assert install.pip_install(["ghost>=1.0"], PROJECT_ROOT) is True
         assert len(calls) == 1
         assert calls[0][:4] == [sys.executable, "-m", "pip", "install"]
+
+    def test_editable_install_is_retried_too(self, monkeypatch: pytest.MonkeyPatch):
+        """pip install -e . goes through the same retry: a fresh install on a PEP 668 Python needs it."""
+        calls = self._fake_runner(
+            monkeypatch,
+            [(1, "error: externally-managed-environment"), (0, "Successfully installed ai-team-os")],
+        )
+        assert install.pip_install(["-e", "."], PROJECT_ROOT) is True
+        assert calls[1][-3:] == ["--break-system-packages", "-e", "."]
+
+    def test_failure_prints_the_last_line(self, monkeypatch: pytest.MonkeyPatch, capsys):
+        self._fake_runner(monkeypatch, [(1, "Collecting ghost\nERROR: No matching distribution found for ghost")])
+        assert install.pip_install(["ghost"], PROJECT_ROOT) is False
+        assert "No matching distribution found for ghost" in capsys.readouterr().out
+
+
+class TestPackageCheck:
+    """The aiteam package itself: importable outside the checkout, from this checkout, at its version."""
+
+    def _probe(self, monkeypatch: pytest.MonkeyPatch, result: dict | None):
+        seen: dict = {}
+
+        def fake_run(args, **kwargs):
+            seen.update(kwargs)
+            if result is None:
+                return subprocess.CompletedProcess(args, 1, "", "ModuleNotFoundError: No module named 'aiteam'")
+            return subprocess.CompletedProcess(args, 0, json.dumps(result) + "\n", "")
+
+        monkeypatch.setattr(install.subprocess, "run", fake_run)
+        return seen
+
+    def test_probe_runs_outside_the_checkout_without_pythonpath(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("PYTHONPATH", str(PROJECT_ROOT / "src"))
+        seen = self._probe(monkeypatch, None)
+        assert install.package_problem(PROJECT_ROOT) == "not importable"
+        assert "PYTHONPATH" not in seen["env"]
+        assert not Path(seen["cwd"]).resolve().is_relative_to(PROJECT_ROOT)
+
+    def test_this_checkout_at_its_version_is_fine(self, monkeypatch: pytest.MonkeyPatch):
+        self._probe(monkeypatch, {"file": str(PROJECT_ROOT / "src" / "aiteam" / "__init__.py"),
+                                  "dist": install.source_version(PROJECT_ROOT)})
+        assert install.package_problem(PROJECT_ROOT) is None
+
+    def test_a_copy_elsewhere_is_a_problem(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        self._probe(monkeypatch, {"file": str(tmp_path / "site-packages" / "aiteam" / "__init__.py"),
+                                  "dist": install.source_version(PROJECT_ROOT)})
+        assert "not this checkout" in install.package_problem(PROJECT_ROOT)
+
+    def test_a_stale_pip_record_is_a_problem(self, monkeypatch: pytest.MonkeyPatch):
+        """An editable install recorded at 1.15.2 still loads the new code, but its entry points lag."""
+        self._probe(monkeypatch, {"file": str(PROJECT_ROOT / "src" / "aiteam" / "__init__.py"), "dist": "1.15.2"})
+        assert "1.15.2" in install.package_problem(PROJECT_ROOT)
+
+    def test_a_problem_reinstalls_from_the_checkout(self, monkeypatch: pytest.MonkeyPatch):
+        problems = iter(["not importable", None])
+        monkeypatch.setattr(install, "package_problem", lambda root: next(problems))
+        monkeypatch.setattr(install, "declared_dependencies", lambda root: [])
+        calls: list[list[str]] = []
+        monkeypatch.setattr(install, "pip_install", lambda args, root: calls.append(args) or True)
+        assert install.verify_runtime_dependencies(PROJECT_ROOT) == []
+        assert calls == [["-e", "."]]
+
+    def test_a_package_that_stays_broken_is_reported(self, monkeypatch: pytest.MonkeyPatch, capsys):
+        monkeypatch.setattr(install, "package_problem", lambda root: "not importable")
+        monkeypatch.setattr(install, "declared_dependencies", lambda root: [])
+        monkeypatch.setattr(install, "pip_install", lambda args, root: False)
+        assert install.verify_runtime_dependencies(PROJECT_ROOT) == ["aiteam (this checkout)"]
+        assert "--break-system-packages -e ." in capsys.readouterr().out

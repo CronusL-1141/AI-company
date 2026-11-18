@@ -59,6 +59,20 @@ preflight 不含、发版仍要跑的两项：`pytest tests/integration/` 全过
 更新后的代码、已安装的适配器、配置与运行中的服务实际生效；写明哪些变化自动生效、哪些
 要重启或重新授信、哪些要用户显式启用。开发机上已应用、源码测试通过，都代替不了这一步。
 
+两条路径都要在 **PEP 668 解释器**上再走一遍（Homebrew Python、Debian 12+ 与 Ubuntu 23.04+
+的系统 Python 都带 EXTERNALLY-MANAGED 标记，裸 `pip install -e .` 会被拒）。发版提交之后、
+打 tag 之前跑：
+
+```bash
+python3 scripts/check_pep668_lifecycle.py   # 需要在跑的 Docker（Colima 也行）；默认从上一个 tag 更新
+```
+
+它在 Ubuntu 24.04 容器里以普通用户身份，用系统 python3 新装一次，并用上一版自带的更新脚本
+更新一次。每条路径都要求：安装器退出码为 0；pip 记录的版本等于本版；照安装器
+登记的命令拉起 MCP（工作目录在仓库外，不带 PYTHONPATH）能列出工具；它拉起的 API 报本版
+版本号。两条都 `[OK]` 才算过。v1.17.0 之前，这类解释器上的新装会装不上 aiteam 包，安装仍显示
+完成，MCP 却起不来，开发机上一直测不出来。
+
 Codex 装机面的严格对账也在这一步：每轮安装（新装、更新）完成后、打 tag 之前，跑
 
 ```bash

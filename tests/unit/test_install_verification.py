@@ -97,7 +97,8 @@ def test_dependency_check_uses_the_same_fresh_import(install_mod, tmp_path, monk
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     monkeypatch.setattr(install_mod, "declared_dependencies", lambda root: [(module, "probe>=1")])
-    monkeypatch.setattr(install_mod, "_pip_install_specs", lambda specs, root: False)
+    monkeypatch.setattr(install_mod, "pip_install", lambda specs, root: False)
+    monkeypatch.setattr(install_mod, "package_problem", lambda root: None)
     assert importlib.util.find_spec(module) is not None
     assert install_mod.verify_runtime_dependencies(tmp_path) == ["probe>=1"]
 

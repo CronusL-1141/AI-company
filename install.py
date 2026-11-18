@@ -789,7 +789,7 @@ def verify_installation(project_root: Path) -> bool:
         (f"{settings_path} hooks", has_hooks, True),
         (f"Main chain owner {core.CHAIN_OWNER_FILE} (source)", owner.get("installed_by") == "source", True),
         ("Hook scripts (plugin/hooks/)", (project_root / "plugin" / "hooks" / "send_event.py").exists(), True),
-        ("Python package (aiteam)", _importable("aiteam"), True),
+        ("Python package (aiteam) from this checkout", package_problem(project_root) is None, True),
     ]
 
     all_ok = True
@@ -895,39 +895,92 @@ def _run_capture(args: list[str], cwd: str | None = None) -> tuple[int, str, str
         return 1, "", str(exc)
 
 
-def _pip_install_specs(specs: list[str], project_root: Path) -> bool:
-    """装指定的几个包；被 PEP 668 拒掉时自动改用 --break-system-packages 重试。
+PEP668_MARKER = "externally-managed-environment"
 
-    不重试就等于 Homebrew / 系统 Python 的用户永远装不上新增依赖，而按本仓的
-    venv 禁令，系统 Python 正是默认的运行环境——四类进程共享它。这里落的位置也是
-    它本来就该在的位置（用户显式跑了安装/更新脚本），不是背着用户改系统。
-    非 PEP 668 的失败不重试：重试治不了网络不通，只会让用户多等一轮。
+
+def pip_install(args: list[str], project_root: Path) -> bool:
+    """pip install ``args``; when PEP 668 refuses it, retry once with --break-system-packages.
+
+    Without the retry, users of Homebrew or Debian/Ubuntu system Python never get
+    the package or a new dependency installed, and under this repo's venv ban the
+    system Python is exactly where OS runs (all four process kinds share it). The
+    user ran the installer or updater, so this is the place they asked for.
+    A failure that is not PEP 668 is not retried: a retry does not fix a network
+    outage, it only makes the user wait twice. The last line of pip's output is
+    printed on failure.
     """
     base = [sys.executable, "-m", "pip", "install"]
-    code, out, err = _run_capture([*base, *specs], cwd=str(project_root))
-    if code == 0:
-        return True
-    if "externally-managed-environment" in f"{out}\n{err}":
+    code, out, err = _run_capture([*base, *args], cwd=str(project_root))
+    if code != 0 and PEP668_MARKER in f"{out}\n{err}":
         print("       解释器带 PEP 668 外部管理标记，改用 --break-system-packages 重试")
-        code, _, _ = _run_capture(
-            [*base, "--break-system-packages", *specs], cwd=str(project_root)
-        )
-        return code == 0
+        code, out, err = _run_capture([*base, "--break-system-packages", *args], cwd=str(project_root))
+    if code != 0:
+        tail = [line for line in f"{err}\n{out}".splitlines() if line.strip()]
+        if tail:
+            print(f"       {tail[-1][:200]}")
+    return code == 0
+
+
+# Run in a new interpreter: what the MCP server will import, and the version pip recorded.
+_PACKAGE_PROBE = """
+import importlib.metadata, json, aiteam
+try:
+    dist = importlib.metadata.version("ai-team-os")
+except importlib.metadata.PackageNotFoundError:
+    dist = None
+print(json.dumps({"file": aiteam.__file__, "dist": dist}))
+"""
+
+
+def package_problem(project_root: Path) -> str | None:
+    """Why the aiteam package the MCP server will import is not this checkout's; None when it is.
+
+    Probed the way Claude Code launches the server (``python -m aiteam.mcp.server``):
+    a new interpreter, outside the checkout, without PYTHONPATH. Three things must
+    hold: aiteam imports, it is this checkout's src/aiteam (not an old copy in
+    site-packages), and pip's record has this checkout's version (a stale record
+    also means console scripts from an older [project.scripts]).
+    """
+    import tempfile
+
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    try:
+        result = subprocess.run([sys.executable, "-c", _PACKAGE_PROBE], capture_output=True, text=True,
+                                timeout=30, cwd=tempfile.gettempdir(), env=env)
+        info = json.loads(result.stdout.strip().splitlines()[-1]) if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        info = None
+    if info is None:
+        return "not importable"
+    location = Path(info["file"]).resolve().parent
+    if not location.is_relative_to((project_root / "src").resolve()):
+        return f"imports from {location}, not this checkout"
+    expected = source_version(project_root)
+    if info["dist"] != expected:
+        return f"pip records version {info['dist'] or 'none'}, this checkout is {expected}"
+    return None
+
+
+def _ensure_package(project_root: Path) -> bool:
+    """Make the aiteam package this checkout's (pip install -e . when it is not); True when it is."""
+    problem = package_problem(project_root)
+    if problem is None:
+        print("[OK] aiteam 包来自本仓库，版本一致")
+        return True
+    print(f"[...] aiteam 包：{problem}；从本仓库重装（pip install -e .）")
+    if pip_install(["-e", "."], project_root):
+        problem = package_problem(project_root)
+        if problem is None:
+            print("[OK] aiteam 包已从本仓库装好")
+            return True
+    print(f"[FAIL] aiteam 包：{problem}。MCP 工具起不来，API 也不会被拉起。")
+    print(f"       请在 {project_root} 下手动执行:")
+    print(f"       {sys.executable} -m pip install --break-system-packages -e .")
     return False
 
 
-def verify_runtime_dependencies(project_root: Path) -> list[str]:
-    """装完之后证明每条声明的依赖真的能 import，缺的当场补装。返回仍然缺的规格。
-
-    这一步存在的理由是一种**静默**的失败：PEP 668 的解释器会直接拒绝
-    `pip install -e .`，而更新脚本对该失败是容忍的（不容忍则后面的 hook / skill /
-    settings 刷新全做不成，那是更大的漂移）。于是新增依赖悄悄没装上，而更新脚本
-    自己并不知道这一版加没加依赖——它只能印一句"依赖若有变动请手动重装"，
-    等于把判断推给不可能知道答案的用户。
-
-    表现不是报错，是"工具在列表里、一调就炸"。所以这里不问 pip 装成功没有，
-    直接问能不能 import。
-    """
+def _verify_declared_dependencies(project_root: Path) -> list[str]:
+    """Prove every dependency pyproject declares imports; install the missing ones. Returns what is still missing."""
     deps = declared_dependencies(project_root)
     if not deps:
         print("[WARN] 读不到 pyproject 依赖声明，跳过依赖校验")
@@ -940,7 +993,7 @@ def verify_runtime_dependencies(project_root: Path) -> list[str]:
 
     specs = [spec for _, spec in missing]
     print(f"[...] {len(specs)} 项声明的依赖不可导入，正在补装: {', '.join(specs)}")
-    if _pip_install_specs(specs, project_root):
+    if pip_install(specs, project_root):
         # 复检：装成功不等于能 import（装错解释器、装了同名不同包都可能）
         still = [spec for mod, spec in missing if not _importable(mod)]
         if not still:
@@ -959,6 +1012,34 @@ def verify_runtime_dependencies(project_root: Path) -> list[str]:
     quoted = " ".join(f'"{spec}"' for spec in still)
     print(f"       {sys.executable} -m pip install --break-system-packages {quoted}")
     return still
+
+
+def verify_runtime_dependencies(project_root: Path) -> list[str]:
+    """Prove the aiteam package and every declared dependency import, repairing what does not; returns what is broken.
+
+    The failure this guards against is silent. A PEP 668 interpreter refuses
+    ``pip install -e .`` outright; the updaters of earlier releases tolerate that
+    (they print a warning and go on), so the aiteam package can be missing, an old
+    copy, or recorded at an old version, and a new dependency can be missing, while
+    the install reports success. The symptom is not an error but an MCP server that
+    never starts, or a tool that fails when called.
+
+    The package comes first: reinstalling it also installs the dependencies. The
+    updater of an earlier release calls this function from the installer it has just
+    pulled, so this check reaches users updating from a release without it.
+    """
+    broken = [] if _ensure_package(project_root) else ["aiteam (this checkout)"]
+    return broken + _verify_declared_dependencies(project_root)
+
+
+def install_python_package(project_root: Path) -> bool:
+    """pip install -e . (retried past PEP 668), then the import checks; True when everything imports."""
+    print("[...] Installing the aiteam package and its dependencies (pip install -e .)...")
+    if pip_install(["-e", "."], project_root):
+        print("[OK] pip install -e . done")
+    else:
+        print("[WARN] pip install -e . failed - checking what is missing...")
+    return not verify_runtime_dependencies(project_root)
 
 
 def _import_package_module(project_root: Path, name: str):
@@ -1100,29 +1181,9 @@ def main():
 
     print()
 
-    # 3. Install Python packages
-    print("[...] Installing Python dependencies...")
-    try:
-        run([sys.executable, "-m", "pip", "install", "-e", "."], cwd=str(project_root))
-        print("[OK] Python dependencies installed")
-    except SystemExit:
-        print("[WARN] pip install -e . failed — trying direct dependency install...")
-        try:
-            # fastmcp 必须带上界：4.0 移除 3.x 兼容 shim，裸名会把新装机器直接
-            # 拉到不兼容的大版本（同 pyproject.toml / plugin/requirements.txt）。
-            run([sys.executable, "-m", "pip", "install",
-                 "fastapi", "uvicorn", "sqlalchemy", "aiosqlite",
-                 "pydantic", "pydantic-settings", "pyyaml", "anyio",
-                 "httpx>=0.28.1", "websockets>=15.0",
-                 "psutil>=5.9.8",
-                 "fastmcp>=3.4.5,<4"],
-                cwd=str(project_root))
-            print("[OK] Core dependencies installed (fallback)")
-        except SystemExit:
-            print("[WARN] Some dependencies may be missing — continuing with setup")
-    # 上面两条路径都可能被 PEP 668 拒掉而只留一句 WARN。这里以"能不能 import"
-    # 复核一遍并补装缺的，别让安装看起来成功、用起来才炸。
-    verify_runtime_dependencies(project_root)
+    # 3. The aiteam package and its dependencies, proven by importing them the way
+    # the MCP server will (a PEP 668 refusal is retried; see pip_install)
+    install_python_package(project_root)
     print()
 
     # 4. Build Dashboard (optional)
@@ -1171,7 +1232,10 @@ def main():
 
     # 9. Record the install, then verify it
     record_install(project_root)
-    all_ok = verify_installation(project_root)
+    if not verify_installation(project_root):
+        print()
+        print("[FAIL] Installation incomplete: fix the [FAIL] items above, then run python3 install.py again.")
+        sys.exit(1)
 
     # 10. Done
     print()
@@ -1203,8 +1267,6 @@ def main():
     print('    (start with /os-help), and use its task wall, memos and memory for')
     print('    everything you do." One sentence makes the OS the working protocol.')
     print()
-    if not all_ok:
-        print("[WARN] Some checks failed. Review the output above before proceeding.")
     print("For more information: plugin/README.md")
 
 

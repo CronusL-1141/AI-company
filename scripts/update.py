@@ -116,63 +116,19 @@ def _git_pull(project_root: Path) -> bool:
     return changed
 
 
-def _pip_install(project_root: Path) -> None:
-    """Re-install the package in editable mode — best effort, never aborts the update.
+def _install_python_package(project_root: Path, install_mod) -> None:
+    """pip install -e . and the import checks, both owned by install.py; never aborts the update.
 
-    `pip install -e .` is refused outright by PEP 668 externally-managed
-    interpreters (Homebrew python3, Debian/Ubuntu system python). This step used
-    to run under check=True, so on those machines the updater died at step 2/7 and
-    hooks / skills / commands / settings.json were never refreshed — the exact
-    drift this updater exists to prevent, and it failed silently as "update
-    crashed". An editable install already resolves to the working tree, so a
-    failure here is usually a no-op; the run continues either way.
+    A PEP 668 interpreter (Homebrew, Debian/Ubuntu system Python) refuses a plain
+    ``pip install -e .``; install.py retries it with --break-system-packages and then
+    proves the aiteam package and every declared dependency import. A failure here
+    must not stop the update: the hooks, skills and settings refreshed after it
+    would drift too.
     """
-    print("[...] Reinstalling Python package (pip install -e .) ...")
-    code, out, err = _run_silent(
-        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=str(project_root)
-    )
-    if code == 0:
-        print("[OK] Python package updated")
-        return
-
-    combined = f"{err}\n{out}"
-    print("[WARN] pip install -e . failed — continuing with the rest of the update")
-    if "externally-managed-environment" in combined:
-        print("       Interpreter is PEP 668 externally managed (Homebrew / system python).")
-        print("       Only needed if dependencies changed; then re-run pip manually with")
-        print("       --break-system-packages.")
-    else:
-        tail = [ln for ln in combined.splitlines() if ln.strip()]
-        if tail:
-            print(f"       {tail[-1][:160]}")
-
-    import importlib.util
-
-    if importlib.util.find_spec("aiteam") is None:
-        print("[WARN] The aiteam package is not importable — MCP tools will not load.")
-        print("       Fix the install above before restarting Claude Code.")
-
-
-def _verify_deps(project_root: Path, install_mod) -> None:
-    """Prove the declared dependencies actually import; install whatever is missing.
-
-    This closes the hole left by the tolerant `_pip_install` above. On a PEP 668
-    interpreter that step is refused outright, so a release that adds a dependency
-    leaves the user without it - and the updater cannot warn about it, because it
-    does not know whether this version added one. The user sees a clean update and
-    then a tool that fails on first call.
-
-    Checking importability answers the question directly, and the shared helper
-    reads the dependency list from pyproject so nothing has to be kept in sync here.
-    """
-    verify = getattr(install_mod, "verify_runtime_dependencies", None)
-    if verify is None:
-        print("[WARN] install.py has no dependency verifier - skipping dependency check")
-        return
     try:
-        verify(project_root)
-    except Exception as exc:  # noqa: BLE001 - a check must never abort the update
-        print(f"[WARN] dependency check failed: {type(exc).__name__} - continuing")
+        install_mod.install_python_package(project_root)
+    except Exception as exc:  # noqa: BLE001 - a package step must never abort the update
+        print(f"[WARN] Python package step failed: {type(exc).__name__} - continuing")
 
 
 def _load_install_module(project_root: Path):
@@ -305,13 +261,12 @@ def run_update(project_root: Path, *, config_dir: str | None = None, migrate_dat
     # The rest runs the installer as pulled just now, not the one loaded before the pull.
     install_mod = _load_install_module(project_root) or install_mod
 
-    # Step 2 - pip install -e ., then prove the dependencies actually import
+    # Step 2 - pip install -e ., then prove the package and its dependencies import
     if offline:
         print("[2/5] --offline - not installing packages")
     else:
         print("[2/5] Updating Python package...")
-        _pip_install(project_root)
-        _verify_deps(project_root, install_mod)
+        _install_python_package(project_root, install_mod)
     print()
 
     # Step 3 - the data directory: out of the legacy location (seven gates), or as it is

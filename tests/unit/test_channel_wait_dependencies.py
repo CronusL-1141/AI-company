@@ -1,6 +1,7 @@
 """Keep runtime dependencies present in all supported installation paths."""
 
 import ast
+import importlib.util
 import tomllib
 from pathlib import Path
 
@@ -22,16 +23,19 @@ def test_channel_wait_dependency_declarations():
             assert specs[name] == version
 
 
-def test_channel_wait_dependencies_in_installer_fallback():
-    tree = ast.parse((ROOT / "install.py").read_text())
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "run" and node.args and isinstance(node.args[0], ast.List)
-        ):
-            continue
-        arguments = {item.value for item in node.args[0].elts if isinstance(item, ast.Constant)}
-        if {"pip", "install", "fastmcp>=3.4.5,<4"} <= arguments:
-            assert {name + version for name, version in REQUIRED.items()} <= arguments
-            return
-    raise AssertionError("The explicit pip dependency fallback was not found")
+def test_installer_takes_dependencies_from_pyproject_only():
+    """install.py repairs missing dependencies from pyproject, with no hand-copied list to fall behind.
+
+    Its old fallback list had drifted (four declared dependencies missing) before it was removed.
+    """
+    spec = importlib.util.spec_from_file_location("install_dependency_source", ROOT / "install.py")
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+    declared = {Requirement(spec).name: str(Requirement(spec).specifier)
+                for _, spec in installer.declared_dependencies(ROOT)}
+    for name, version in REQUIRED.items():
+        assert declared[name] == version
+    constants = {node.value for node in ast.walk(ast.parse((ROOT / "install.py").read_text()))
+                 if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+    pinned = {name + version for name, version in REQUIRED.items()}
+    assert not pinned & constants, "install.py re-grew a dependency list"

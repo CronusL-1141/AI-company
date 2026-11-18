@@ -525,3 +525,9 @@ class TestSingleInstallPath:
             assert f"install_mod.{step}(" in text, step
         assert "send_event.py" not in text, "update.py re-grew a hardcoded hook list"
         assert "shutil" not in text, "update.py re-grew its own copy loop"
+
+    def test_updater_delegates_the_python_package_to_installer(self):
+        """One pip path for install and update: the updater's own copy never retried past PEP 668."""
+        text = (REPO_ROOT / "scripts" / "update.py").read_text(encoding="utf-8")
+        assert "install_mod.install_python_package(" in text
+        assert '"pip"' not in text, "update.py re-grew its own pip call"

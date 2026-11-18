@@ -69,9 +69,12 @@ def _commands(settings: Path) -> list[str]:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the ${CLAUDE_CONFIG_DIR:-...} form is POSIX only")
-def test_t3_source_install_lands_in_the_configured_folder(machine, tmp_path, capsys):
+def test_t3_source_install_lands_in_the_configured_folder(machine, tmp_path, monkeypatch, capsys):
     home, profile, call = machine
     installer = _load(ROOT / "install.py", "_t3_install")
+    # Where the files land is under test, not this machine's pip install (its own tests and
+    # scripts/check_pep668_lifecycle.py cover that; a worktree or a stale record would fail here).
+    monkeypatch.setattr(installer, "package_problem", lambda root: None)
     project = tmp_path / "project"  # where a fallback .mcp.json would go; never the checkout
     project.mkdir()
 
