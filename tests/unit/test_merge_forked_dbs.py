@@ -259,7 +259,7 @@ def test_a_task_both_changed_is_merged_by_the_sync_rules(merged) -> None:
     assert json.loads(config)["task_management"]["revision"] == 6
     lost = {(c["field"], c["winner"], c["loser_value"], c["rule"]) for c in report["conflicts"]
             if c["table"] == "tasks" and c["pk"] == "t-conflict"}
-    assert ("status", "air", "running", "status_rank") in lost
+    assert ("status", "edge", "running", "status_rank") in lost
     assert ("title", CENTER_NODE, "原标题", "last_writer") in lost
 
 
@@ -268,7 +268,7 @@ def test_two_completions_keep_one_result_and_file_the_other_as_a_memo(merged) ->
     assert _read(db, "SELECT result FROM tasks WHERE id = 't-done'") == [("mini 的结果",)]
     memos = _read(db, "SELECT content, author, memo_type FROM task_memos WHERE task_id = 't-done'")
     assert len(memos) == 1 and "Air 的结果" in memos[0][0] and memos[0][1:] == ("sync", "issue")
-    assert report["memos"][0]["loser"] == "air"
+    assert report["memos"][0]["loser"] == "edge"
 
 
 def test_a_session_row_follows_the_machine_it_last_ran_on(merged) -> None:

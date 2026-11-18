@@ -3,6 +3,72 @@
 AI Team OS 的所有重要变更均记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/)
 
+## [1.17.0] - 2026-11-18
+
+一个 **minor** 版本。两台机器现在可以共用一份 AI Team OS 记录：可选的多机同步默认关闭，开启后一台机器做中心、另一台做边缘，在任一台上写下的项目、任务、memo、记忆、报告、频道、会议与简报两台都能看到，链路断开期间的写入在恢复后补发。对 AI Team OS 的反馈可以从会话直达 GitHub，只有你在客户端自己的确认框里点了 Accept 才会发出。登记 Claude Code 配置目录之后，你在里面写的指令、记忆、skill 等文件会逐版本备份在本机。`channel_wait` 单次调用最长可以挂两小时。之所以定为 minor 而不是 patch，是因为这些都是新功能：多机同步及其 `python3 -m aiteam.sync` 命令、反馈直达 GitHub（四个 MCP 工具与 `/os-feedback`）、工作流资产备份（四个 MCP 工具与一个 Dashboard 页面），以及三条提示（E30-E32）。**部分行为有变化（见行为变化）。hook 与 Codex hook 授信都没有变化，不需要重新授信；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话**（见升级说明）。
+
+### 新增
+
+- **多机同步（可选，默认关闭）**：一台机器作为中心运行，另一台作为边缘。共享记录（项目与阶段、任务与 memo、记忆、报告、频道、会议、简报、定时唤醒与生态档案）一律经中心写入：边缘把每次写入转发给中心，中心恰好执行一次，边缘至多等一秒，让本机副本追上之后再应答。连不上中心时，边缘在本机执行这次写入、记入队列，链路恢复后按顺序重放；边缘落后超过中心 90 天的变更日志时，从快照整份重建副本。会话记录（团队、agent、事件、活动、工作流运行与用量观测）归会话所在的那台机器，由边缘上行到中心，所以中心的 Dashboard 能看到两台机器：事件、工作流、agent 与项目会话带来源徽章，顶栏有来源机器筛选，套餐用量页列出另一台机器最新的额度。每台机器只治理、编号自己的会话，派生用量也只按自己的会话计算；定时唤醒在它的会话所在的机器上执行。并发修改按固定规则合并：任务状态只前进（completed 优先，其次 failed、running、blocked、pending），其他字段归后写者，会议参与者取并集，每个输掉的值都保留在冲突清单里（`GET /api/sync/conflicts`），可以逐条翻转，也可以整批以某台机器为准。必须在线的写入（删除、生态档案、应用记忆整理、保存套餐锚点）在边缘离线时返回 HTTP 503。在你启用之前，机器按单机运行：不记来源、不捕获变更，行为与以前完全一样。
+- **启用同步**：步骤都在 `python3 -m aiteam.sync` 里，凡是会改动东西的命令，不加 `--apply` 时只预演。前提：两台机器运行同一版本的 AI Team OS（握手核对同步协议、`PRAGMA user_version` 与同步表，中心版本不同时边缘保持离线）；每台机器都读得到自己的硬件标识；中心的 API 留在 127.0.0.1:8000，边缘经一条由你自己维持的 SSH 本地转发连到它（边缘默认的 `center_url` 是 `http://127.0.0.1:18000`）；两台从同一份基线数据库开始。切换时先停掉两台的 API：用 `check-baseline` 比对两个数据库，把边缘的数据库复制到中心覆盖它（或者合并两库，见下文），在中心运行 `enable --role center --name NAME`，在边缘运行 `enable --role edge --name NAME`，然后先启动中心、再启动边缘。`status` 显示节点状态，`leave` 让数据库退回单机，`repin` 让边缘认下新的或恢复过的中心，`compare`、`orphans` 与 `resend-session` 用于核对与修复，`update-center` 经 SSH 更新中心。`enable` 在数据库旁写 `node.json`，绑定本机硬件；数据库自己也记着它属于哪个节点：`node.json` 缺失或损坏时，机器保留原身份、同步暂停（E31），数据库被拷到另一台机器时以临时来源记录、不同步。不要在机器之间复制 `node.json`。
+- **用 launchd 保活中心的 API（macOS）**：`python3 scripts/install_center_launchd.py` 安装一个 launchd 任务，登录时拉起中心的 API，进程退出就重新拉起；它不做任何调度。只有本机 `node.json` 声明为中心角色且在本机核对通过时才肯安装，不加 `--apply` 时只预演，`--remove` 卸载。安装与更新 AI Team OS 都不会启用它。
+- **切换前合并两个数据库**：两台机器各自在同一份数据库的副本上继续写过时，`python3 scripts/merge_forked_dbs.py --edge EDGE.db --center CENTER.db --center-node-file node.json --out-dir OUT` 把它们合并成两个节点共同起步的那份基线；先在中心运行 `enable --role center`，因为 `--apply` 从中心的 `node.json` 读取节点 id。两库的 `PRAGMA user_version` 或 schema 不同、任一库已经参与同步，或者两边各有一行占着同一个唯一值（例如同一项目根、同一队名）时，它都会中止。会话记录取并集，两边都改过的行整行取会话最后运行的那台机器的版本；共享记录取并集，并按同步本身的规则逐字段合并；中心的 Codex 用量观测排在边缘之后重新编号。每个输掉的值与每个删除判定都列在 `report.json` 与 `summary.txt` 里。默认只预演，产物放在 `OUT/preview` 下。加 `--apply` 时，先把两份输入以只读方式归档，附 sha256 与清单，再从归档读取合并，写出 `OUT/merged-<sha>-<sha>.db`。输入从不被写入，被杀掉的运行不会留下写到一半的结果，对同一组输入再运行一次会直接给出已完成的结果。
+- **反馈直达 GitHub 上的维护者**：把 AI Team OS 的问题或想法告诉助手（或在 Claude Code 里运行 `/os-feedback`），它会起草 bug 报告，发到公开仓库成为 Issue，或者起草想法，发到该仓库 Discussions 的 Ideas。`feedback_draft` 先清理文本（见安全），按仓库自己的表单排版，返回将要发出的原文、内容哈希，以及至多五条相似的 issue 与讨论；由你选择新开、作为评论补充到其中一条，或者不发。草稿 30 分钟后过期，改动文本中的任何一处都会生成新草稿。随后 `feedback_submit` 在客户端自己的确认框里问你，框里列出去处、标题与哈希、只读全文页的链接和原文：点 Accept 立即发出，点 Decline 什么都不发。确认框被取消、5 分钟无人应答，或者客户端不提供确认框时，什么都不发，改为给你一个预填好的 GitHub 网页，由你自己提交（文本长到放不进链接时，给一个本机文件供你粘贴）。帖子优先经你本机已登录、能发帖的 `gh` 发出；否则经 OS 的 GitHub App「AI Team OS Feedback」，用你此前给过的授权，或者在第二个确认框里当场授权，到 github.com/login/device 输入授权码（见安全）；客户端不提供确认框时，以预填网页的方式交给你。已经发出的文本，不论是本机发的，还是按隐藏标记查到的、由另一台机器发的，都不会再发一次；发送超时的不会重试，而是到 GitHub 上查找；每台机器 24 小时内至多发 5 条。安全问题不公开发布（给你私密报告链接），使用疑问给你 Q&A 链接。`feedback_account` 显示反馈走哪条路、以谁的身份，`feedback_list` 列出已经提交的反馈。每个帖子末尾有一行说明它由 AI agent 起草、经你确认，另有一个带草稿 id 与内容哈希的隐藏标记。
+- **工作流资产备份（Claude Code，macOS）**：登记一个 Claude Code 配置目录之后（在会话里说「登记工作流备份」，它会调用 `asset_root_enroll`），AI Team OS 在本机保存你在里面写的东西的各个版本：全局指令、`loop.md`、项目记忆、skill、agent、命令、hook 脚本、hook 注册、MCP 定义与插件清单。登录凭据、缓存与会话状态从不读取；AI Team OS 自己安装的文件跳过，除非你改过它们，改过的作为修改过的模板保存。登记时立即备份一次，之后在 Write、Edit、MultiEdit 与 NotebookEdit 工具每次写文件时，以及在会话边界（开始、停止、结束与压缩前后）备份；同一目录至多每 30 秒比对一次，除非自上次比对以来在该目录的会话里运行过 shell 命令。每份内容按 SHA-256 只存一次，以 zlib 压缩，放在 OS 数据目录下的 `asset-store/`；历史版本从不清理，超过 2 GB 时「工作流资产」页给出警告。超过 5 MB 的文件、符号链接、读不了的文件与疑似密钥都会被跳过并列出（E30）；只有你本人的原话才能放行疑似密钥或排除文件（`asset_scan_resolve`，留审计）。`asset_backup_status` 显示哪些已备份、哪些没有，`asset_backup_run` 立即比对，只读的「工作流资产」页（`/assets`）显示同样的内容。登记目录之前什么都不运行；没有登记目录时，每个 hook 事件只多一次判空。hook 脚本没有改动：备份借用 API 本来就收到的事件。
+- **三条提示（E30-E32）**：`asset_backup_attention`（只在 Claude Code 中出现：工作流备份跳过了哪些文件及原因、配置目录或数据目录不在了，或者备份在同步边缘上暂停）、`sync_identity_refused`（本机的同步身份没有核对通过：给出原因，并说明本机是保留登记身份、同步暂停，以临时来源记录，还是按单机运行；在修好之前每次会话启动与每次发言都显示）与 `feedback_intro`（每台机器上每个宿主一次，在首次全新启动的会话里：有关 AI Team OS 的问题与想法可以直接从会话发出；在 `AITEAM_TOOLSETS=default` 或只读档下不显示，也绝不挤掉同级别的其他提示，例如新版本提示）。
+- **清单**：126 个 MCP 工具，分布在 20 个模块（`asset_backup_status`、`asset_root_enroll`、`asset_backup_run`、`asset_scan_resolve`、`feedback_draft`、`feedback_submit`、`feedback_account`、`feedback_list`，分属新的工具组 `assets` 与 `feedback`，两者都不在 `default` 里）；274 个 REST 端点（`/api/sync` 下 14 个、`/api/feedback` 下 11 个、`/api/assets` 下 4 个，另有 `GET /api/account-usage/other-nodes`、`PUT /api/account-usage/{account_key}/plan-anchor` 与 `GET /api/task-wall/waiting-user`）；25 个 Dashboard 页面（新增的是「工作流资产」）；33 条仓库机检。I31 要求每条 API 路由标注自己的同步面，I32 核对每张同步表都带着变更触发器与来源列，I33 守住工作流备份的三条规矩：OS 自己的文件由 `plugin/` 推导，拒绝表里的样例从不被备份，备份没有定时器与后台任务。
+
+### 行为变化
+
+- **任务看板的统计与列表包含子任务**：项目墙的 `stats`、摘要（最近动静、近 7 天趋势、最优先与卡住列表）、完成列表与开场简报都包含子任务，每个任务计一次；过去它们只统计顶层任务。子任务是一张独立的卡片，按自己的状态、期限与优先级排序、筛选和分页，卡片上方有「父任务」链接；父任务卡片保留子任务进度。`task_list_project` 与 `GET /api/projects/{id}/task-wall` 返回子任务行，带 `parent_id` 与 `parent_title`。
+- **提示卡片：「已完成」与「不用」取代「忽略」**：在待处理页，action 类提示的卡片提供「已完成」，点了即清除（条件再次出现时会回来）；未登记目录的询问（E07）提供「不用」，即不登记该目录，与终端提示行里的答法同词。卡片上不再有永久生效的「忽略」（`notice_dismiss` 仍在），「忽略 24 小时」改为「暂缓 24 小时」，横幅上也一样。
+
+### 变更
+
+- **`channel_wait` 单次调用最长挂两小时**：`timeout_seconds` 上限从 300 提到 7200，等消息的空闲会话只占一次工具调用，不再每次短等待到期就唤醒一轮模型。默认值仍是 45 秒。客户端的工具超时必须大于 `timeout_seconds + 4 * io_timeout_seconds + 5`（见升级说明）。
+- **等你决定的任务跨项目列出**：待处理页的「等用户决定的任务」默认列出全部项目，每行标出所属项目（不属于任何项目的标「未归属项目」），也可以只看一个项目；条数与侧栏角标一致。它读取新增的 `GET /api/task-wall/waiting-user`（可选 `project_id`），与角标、任务墙摘要按同一判据构造，任务编辑后随之刷新。
+- **缺价模型在套餐面板上点名**：本周期有价格表不认识的模型的用量时，Codex 套餐用量面板列出这些模型及其请求数，并说明这部分没有计入金额、预计可用量偏低；已知部分照常累计。估算结果带上 `unpriced_models` 与 `unpriced_request_count`。
+- **`os_health_check` 报告同步状态**：新增的 `sync` 一节给出本机的角色与链路、队列、孤儿写入与待你处理的冲突，只在需要人处理时报红；单机就是 ok。
+- **GitHub 表单**：公开仓库的 bug 表单先问发生了什么、如何复现，再问版本、安装方式、环境与 `/os-doctor` 输出；新想法引导到 Discussions 的 Ideas，它与 Q&A 各有自己的表单；PR 模板重写；另有一个 workflow 给反馈工具提交的报告补上 bug 标签，因为没有推送权限的人经 API 发来的标签会被 GitHub 丢掉。这些在发布到 GitHub 之后生效。
+
+### 修复
+
+- **Codex 套餐估算卡在 $0**：「预计套餐可用量（美元）」可能长时间显示 $0，而已使用百分比照常增长。每 30 秒一轮的采样会把近期改动过的每个 Codex 日志从头整份重读，长会话让读取量超过 512 MiB 的预算，整轮作废。估算现在读取用量记录器本来就在记的台账，只消费上次位置之后记下的事实（每轮至多 5,000 条，剩下的下一轮接着消费），迟到的事实只计一次，被改写或分叉复制的日志不会重复计入。台账读不出时，这一轮失败、不写入任何东西，下一轮接着同一区间继续。
+- **用量记录器在超长行之后丢失上下文**：超过 1 MB 的 Codex 日志行（压缩后的历史、大段工具输出）会清空记录器的上下文，同一文件后面的事实因此丢掉会话、模型与提供方，无法计价。现在这类行按类型识别，只有与归属有关的类型才重置上下文。已经记下的事实不会重读。
+- **Codex 桌面版更新后的额度监控**：这次更新挪走了桌面版自带的 Codex 可执行文件，而额度采样只认一个位置，从此持续失败（手动采样返回 HTTP 503）。现在按下列顺序取第一个找到的可执行文件：设置了 `AITEAM_CODEX_BINARY` 时只用它（必须是绝对路径），桌面版在 /Applications 与 ~/Applications 下的新旧两种布局（macOS），Codex home 下的独立安装，然后是在 `PATH` 加上 Homebrew、/usr/local/bin、~/.local/bin、~/bin 与 Nix profile 之后查找 `codex`。在 macOS 以外，独立安装或 `PATH` 上的 Codex 不再需要设置这个变量。什么都找不到时，报错会列出查过的位置。子进程显式拿到解析好的 Codex home，未登录时提示运行 `codex login`。
+- **待处理页的提示列表与角标一致**：列表、侧栏角标与总览计数改用同一判据（`GET /api/notices?status=waiting`）：频道点名（E10）这类状态行不再列在这里，暂缓中的提示要到暂缓期满才回到列表。
+- **频道点名（E10）读完即清**：推进已读水位（`channel_read_ack`）时，会重新核对该读者在该项目里开着的点名提示：全部读完即清除，读了一部分就更新条数。过去它要等同一宿主、同一项目的下一次发言才会清。
+
+### 安全
+
+- **反馈文本在你看到之前先经过检查**：草稿（标题、正文与诊断信息）依次经过：(1) 工作流备份的密钥扫描，任一命中就拒绝起草，没有放行的办法，因为去处是公开仓库；拒绝说明会写出规则、字段与行号，从不写出命中的文本；(2) 改写，各项改写数在预览里列出：本项目、已注册的项目根、Claude Code 配置目录、Codex home 与 OS 数据目录换成占位符，任何家目录路径换成 `~`，邮箱换成 `<email>`，本机的主机名与登录名换成 `<host>` 与 `<user>`，`Bearer`、`Basic` 或 `Token` 之后形似凭据的字符串，以及 URL 里的用户名、密码、查询值和形似密钥的路径段都会打码；(3) 你自己的私有术语词表，即 OS 数据目录下的 `feedback-private-terms.txt`（一行一个词，至多 500 条），命中任何一个词就拒绝起草，词表本身从不发出。最终文本还会再扫描一遍。短于三个字符或属于常见词的登录名与主机名不改写，而是在预览里点名，残留的绝对路径同样如此。诊断信息只取白名单：AI Team OS 版本、安装方式、宿主及其版本（取自客户端握手信息）与平台。
+- **发布要你本人点 Accept**：发布端点只接受客户端确认框给出的确认，agent 无法代答，而且只认给你看过的那个内容哈希；发出的文本从 API 取回，从不取自 agent。只读全文页（`GET /api/feedback/drafts/{id}/view`）显示转义后的原文，以内容安全策略（CSP）禁止一切脚本与表单，读取时不改动任何东西。
+- **反馈用的 GitHub App 全貌**：只有你的 `gh` 发不了帖时才会用到「AI Team OS Feedback」。它只安装在公开的 AI Team OS 仓库上，只能读写该仓库的 issue 与讨论；所以经你授权后，OS 能做的只是在那里搜索、以你的身份发 issue、讨论与评论（GitHub 会标明经由该 App 发出），别的都做不了。授权走 GitHub 的设备流程，只用 App 公开的 client ID，任何地方都没有 client secret。GitHub 签发的用户令牌有效期 8 小时；OS 在到期前约五分钟用只能使用一次的 refresh token（有效期 6 个月）换新，换新失败或 GitHub 拒绝该令牌时删除保存的这一对。存放位置：macOS 钥匙串（经 `/usr/bin/security` 写入，密钥走标准输入，从不出现在命令行上）；Linux 上有会话总线时经 `secret-tool` 存入 Secret Service；其他情况存为 OS 数据目录下的 `feedback/github-token.json`（文件 0600，目录 0700）。令牌，以及你所输入的授权码背后的设备码，从不出现在日志、反馈台账、事件、HTTP 返回与 MCP 返回里。要登出，调用 `feedback_account` 并传 `action="sign_out"`（或 `DELETE /api/feedback/github/account`）：它删除本机保存的授权，并返回在 GitHub 上撤销授权的页面 https://github.com/settings/apps/authorizations。
+- **工作流备份把密钥挡在外面**：疑似密钥不保存；放行绑定到那一份确切的内容（之后再改会重新扫描），排除绑定到路径。`settings.json` 只保留 `hooks` 段，并去掉 OS 自己的条目；全局配置文件只保留 `mcpServers`，丢弃 `env` 与 `headers` 的值。MCP 与 hook 定义里，敏感参数的值、`Bearer` 或 `Basic` 之后的凭据、URL 里的用户名、密码与查询值，以及形似密钥的路径段都换成 `<redacted>`，之后整条再扫描一遍；插件清单去掉本机路径与 URL 凭据。符号链接一律不跟随。只能登记 AI Team OS 认得的 Claude Code 配置目录（本会话的、API 自己的，或者它安装过的）。备份存储只有你本人可读（目录 0700、文件 0600），也从不创建数据目录。
+- **同步路由信任回环接口**：`/api/sync` 下的路由没有自己的认证，依靠的是 API 只监听 127.0.0.1。让中心的 API 只绑定在那里，边缘只经 SSH 本地转发访问它，不要把它的端口暴露到任何网络上。
+
+### 升级说明
+
+- **产品内提示**：只要 API 能访问 GitHub API，v1.16.0 的会话就会显示新版提示和对应安装方式的命令。
+- **Claude Code 源码安装**：在安装所在的 checkout 里，确认位于 `master`，运行 `git pull --ff-only`，再运行 `python3 install.py --update`；它同时装上 `/os-feedback`。
+- **Claude Code 插件**：运行 `claude plugin marketplace update ai-team-os`，再运行 `claude plugin update ai-team-os@ai-team-os`，然后重启两次 Claude Code：第一次启动会升级 Python 包并提示「Upgraded to v1.17.0 (was v1.16.0). Restart Claude Code to apply」，第二次替换旧版 API。
+- **Codex 适配器**：在安装所在的 checkout 里，确认位于 `master`，运行 `python3 scripts/codex_adapter.py upgrade`（它会拉取代码、重装包并运行 `update`），然后按 `status` 对 API 的报告处理，做法见[方式 C](README.zh-CN.md#方式-ccodex-适配器生命周期)。
+- **hook 与 Codex hook 授信都没有变化**：本版没有改动任何 hook 脚本，`hooks.json` 与 `hook-trust.lock` 与 v1.16.0 相同（I17b：保持授信 9 条，新增待授信 0 条，已摘除 0 条，无槽位复用），不需要重新授信。
+- **重启 API 与所有开着的会话**：重启后的 Claude Code 会话连上时，MCP 自启会替换旧版 API；也可以让 Claude 调用 `os_restart_api`。重开所有 Claude Code 与 Codex 会话：八个新的 MCP 工具与 `channel_wait` 的新上限只在新的 MCP 会话里生效。
+- **API 首次启动**会就地把数据库升到最新：新建 21 张表（12 张是同步自用的簿记表，8 张属于工作流备份，1 张是反馈台账），给 44 张已有的表加上 `origin_node` 列（已有的行留空，从不回填），装上 161 个变更捕获触发器与一个视图。这些都不改写已有的行，所以无论库多大都很快，而且可以重复执行：每次启动都比对已存的触发器 SQL，只改动不同的部分。单机上触发器什么都不记，数据库不会因此变大。同一次启动还会给已有的 Codex 用量观测一次性编号并补齐查询列，约 28 万行需要几秒；已存的套餐统计摘要会在首次读取时重建一次。
+- **Codex 套餐估算重新建立基线**：更新后的第一次采样建立新的零点，从第二次采样起重新累计；当前周期已经累计的金额保留。
+- **长时间的 `channel_wait` 需要更长的客户端超时**：把客户端的工具超时设得大于 `timeout_seconds + 4 * io_timeout_seconds + 5`，也就是在 `io_timeout_seconds` 取默认值 10 时，等两小时要超过 7245 秒。Codex 在其配置的 `[mcp_servers.ai-team-os]` 下设置 `tool_timeout_sec`；Codex 文档写明的默认值是 60 秒。
+- **`AITEAM_TOOLSETS=default`**：`assets` 与 `feedback` 两个工具组不在 default 档里；要用这些工具，把它们加进去（例如 `AITEAM_TOOLSETS=default,feedback`）并重开会话。没有设置 `AITEAM_TOOLSETS` 时，所有工具照旧全部注册。
+- **多机同步在更新时什么都不用做**：在你运行 `enable` 之前，每台机器都保持单机。启用之前，先把两台机器都更新到 v1.17.0。
+
+### 已知限制
+
+- **多机同步刚刚推出**：它是在一个中心加一个边缘的配置下验证的。冲突只能经 REST 处理（`/api/sync/conflicts`），还没有对应的 MCP 工具与 Dashboard 页面，也没有在线或离线状态提示。边缘的 Dashboard 只显示本机的会话，因为会话面的读取不转发到中心。会话行属于会话所在的机器：在中心上修改边缘的团队或 agent 不会转移归属，以边缘的版本为准。其他机器的额度只显示最新一次快照。在 macOS 以外，普通用户通常读到的是会随磁盘镜像一起复制的硬件标识（Linux 的 `/etc/machine-id`、Windows 的 `MachineGuid`），所以在那里防拷贝只防得住拷贝文件，防不住克隆整台机器。工作流备份在边缘上暂停。
+- **合并是双向的**：没有共同祖先可比，只有一边改过的字段可能输给另一边时间更晚的行；每一处这样的情形都列在报告里，两份输入也都留在归档中。
+- **工作流备份**：只支持 macOS 与 Claude Code 配置目录（Codex home 留待后续），还没有恢复命令，历史版本从不清理。
+- **反馈**：密钥扫描逐行进行，拆在两行里的凭据扫不出来；你读预览是最后一道检查。还需要 App 授权的草稿无法先查找相似帖子。
+- **Codex 套餐估算**：它依赖用量记录器在运行，新的用量要晚几轮才进入估算。
+
 ## [1.16.0] - 2026-10-27
 
 一个 **minor** 版本。AI Team OS 不再假定 Claude Code 在 `~/.claude`、Codex 在 `~/.codex`：数据搬进它自己的目录 `~/.aiteam`，所有路径都跟随 `CLAUDE_CONFIG_DIR` 与 `CODEX_HOME`。由你发起的更新只在七道安全检查全部通过后才迁移已有数据，否则原地沿用并给出提示。Codex 计价新增 Ultrafast 档位，Claude Code 发起的 `codex exec` 会连同所请求的档位一起记录，项目页列出每个已记录的会话，以及能追溯到它的运行中任务。之所以定为 minor 而不是 patch，是因为这些都是新功能：独立的数据目录及其受保护的迁移、`aiteam paths`、五条数据目录提示（E25-E29）与 Ultrafast 计价。**部分行为有变化（见行为变化）。更新可能会迁移数据目录，所以更新前请先关掉其他 Claude Code 与 Codex 会话。Codex hook 授信没有变化；更新后请重启 API 和所有开着的 Claude Code 与 Codex 会话**（见升级说明）。

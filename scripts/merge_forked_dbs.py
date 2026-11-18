@@ -59,11 +59,11 @@ never written. A run that is killed leaves only its working directory, removed b
 next run; running again on the same inputs finds the finished result and stops.
 
 Usage (the center's node id comes from its node.json, written by
-``python3 -m aiteam.sync enable --role center --name mini --apply`` on the center
+``python3 -m aiteam.sync enable --role center --name <center> --apply`` on the center
 before its database is copied; a dry run may name an id instead):
 
-    python3 scripts/merge_forked_dbs.py --edge AIR.db --center MINI.db \
-        --center-node-file MINI-node.json --out-dir OUT [--apply]
+    python3 scripts/merge_forked_dbs.py --edge EDGE.db --center CENTER.db \
+        --center-node-file CENTER-node.json --out-dir OUT [--apply]
 
 Exit codes: 0 done, 2 bad input, 3 clock convention or schema differs, 4 a unique
 value collides, 5 a database already belongs to a sync, 6 an input changed during the
@@ -1230,13 +1230,13 @@ def _run(args: argparse.Namespace, report: Report) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="merge_forked_dbs.py", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--edge", required=True, help="the edge's database (Air): it owns the baseline")
-    parser.add_argument("--center", required=True, help="the center's database (mini)")
+    parser.add_argument("--edge", required=True, help="the edge's database: it owns the baseline")
+    parser.add_argument("--center", required=True, help="the center's database")
     node = parser.add_mutually_exclusive_group(required=True)
     node.add_argument("--center-node-file", help="the center's node.json (required with --apply)")
     node.add_argument("--center-node", help="the center's node id (dry run only)")
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--edge-name", default="air", help="how the report names the edge")
+    parser.add_argument("--edge-name", default="edge", help="how the report names the edge")
     parser.add_argument("--fork-at", help="fork time (ISO, UTC when no zone); derived from the data by default")
     parser.add_argument("--apply", action="store_true", help="archive the inputs and produce the merged database")
     args = parser.parse_args(argv)

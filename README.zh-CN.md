@@ -13,7 +13,7 @@ AI Team OS 是 **Claude Code 与 Codex 共享的工作底座**。任务、项目
 
 <!-- 上方 Codex 兼容说明跨版本保留。每次发版时，用该版本已核验的摘要整体替换当前公告；历史细节保留在 CHANGELOG.zh-CN.md。 -->
 
-> ⚡ **v1.16.0 — OS 数据有了自己的目录，所有路径都跟随你的 Claude Code 与 Codex 配置目录。** 数据从 Claude Code 配置目录里搬到 `~/.aiteam`（可用 `AITEAM_DATA_DIR` 覆盖）；由你发起的更新只在七道安全检查全部通过后才迁移，否则原地沿用并给出提示。`CLAUDE_CONFIG_DIR` 与 `CODEX_HOME` 处处生效，`aiteam paths` 显示一个 shell 解析到的位置。Codex 计价新增 Ultrafast 档位，Claude Code 发起的 `codex exec` 会连同所请求的档位一起记录。更新前请关掉其他 Claude Code 与 Codex 会话；更新后重启 API 并重开所有会话，详见更新日志。
+> ⚡ **v1.17.0 — 反馈直达 GitHub，两台机器可选共用一份记录。** 把 AI Team OS 的问题或想法告诉助手：它起草 bug 报告（发成 Issue）或想法（发到 Discussions），去掉隐私细节，你在客户端自己的确认框里点 Accept 后才发出。多机同步默认关闭，开启后中心与边缘两台机器共享项目、任务、记忆与报告，离线期间的写入事后补发。登记 Claude Code 配置目录后，你在里面写的指令、skill 等文件会逐版本备份在本机。`channel_wait` 单次调用最长可挂两小时。hook 授信不变；更新后重启 API 并重开所有会话，详见更新日志。
 >
 > 完整版本历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
 

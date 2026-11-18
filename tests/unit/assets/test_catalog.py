@@ -50,7 +50,7 @@ def test_assets_are_classified(path, category):
     "plugins/cache/p/plugin.json",
     "plugins/marketplaces/m/x.json",
     "usage-merge.json",
-    "civ-channel/sentinel.py",                 # anything no category names
+    "other-tool/sentinel.py",                  # anything no category names
     "",
     "/etc/passwd",
     "../outside/CLAUDE.md",
